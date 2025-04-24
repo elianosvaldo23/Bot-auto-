@@ -7,10 +7,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from openai import OpenAI
 import json
-from dotenv import load_dotenv
-
-# Cargar variables de entorno desde .env para desarrollo local
-load_dotenv()
 
 # Configuración de logging
 logging.basicConfig(
@@ -20,12 +16,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuración de OpenAI
-OPENAI_API_KEY =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
+OPENAI_API_KEY = "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"
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
 # Configuración del bot
-BOT_TOKEN=7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw
-ADMIN_ID =1742433244
+BOT_TOKEN = "7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw"
+ADMIN_ID = 1742433244  # ID del administrador
 
 # Definición de canales y sus temáticas
 CHANNELS = {
