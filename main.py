@@ -1,17 +1,15 @@
 import os
 import logging
 import asyncio
-import schedule
 import time
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from openai import OpenAI
-import random
 import json
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# Cargar variables de entorno desde .env para desarrollo local
 load_dotenv()
 
 # Configuración de logging
@@ -26,8 +24,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-proj-u2Yn7V2Iej5HjlSlNniofkDVr-
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
 # Configuración del bot
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "1742433244"))
+BOT_TOKEN = os.getenv("7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1742433244"))  # Valor predeterminado como respaldo
 
 # Definición de canales y sus temáticas
 CHANNELS = {
@@ -50,19 +48,27 @@ bot_state = {
     }
 }
 
-# Intentar cargar estado previo si existe
-try:
-    with open('bot_state.json', 'r') as f:
-        bot_state = json.load(f)
-except FileNotFoundError:
-    # Si el archivo no existe, guardar el estado inicial
-    with open('bot_state.json', 'w') as f:
-        json.dump(bot_state, f)
-
 # Función para guardar el estado del bot
 def save_state():
-    with open('bot_state.json', 'w') as f:
-        json.dump(bot_state, f)
+    try:
+        with open('bot_state.json', 'w') as f:
+            json.dump(bot_state, f)
+        logger.info("Estado del bot guardado correctamente")
+    except Exception as e:
+        logger.error(f"Error al guardar estado: {e}")
+
+# Función para cargar el estado del bot
+def load_state():
+    global bot_state
+    try:
+        with open('bot_state.json', 'r') as f:
+            bot_state = json.load(f)
+        logger.info("Estado del bot cargado correctamente")
+    except FileNotFoundError:
+        logger.info("Archivo de estado no encontrado, usando valores predeterminados")
+        save_state()
+    except Exception as e:
+        logger.error(f"Error al cargar estado: {e}")
 
 # Función para generar contenido con OpenAI
 async def generate_content(theme):
@@ -87,23 +93,6 @@ async def generate_content(theme):
     except Exception as e:
         logger.error(f"Error al generar contenido: {e}")
         return f"❌ No se pudo generar contenido para {theme} debido a un error. Por favor, intenta más tarde."
-
-# Función para generar una imagen relacionada (simulada por ahora)
-async def generate_image_prompt(theme):
-    try:
-        response = client_openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "Genera una descripción detallada para crear una imagen relacionada con el tema indicado. La descripción debe ser detallada y visual."},
-                {"role": "user", "content": f"Crea una descripción detallada para generar una imagen relacionada con {theme}. La imagen será usada en redes sociales."}
-            ],
-            temperature=0.7,
-            max_tokens=200
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Error al generar prompt de imagen: {e}")
-        return f"Una imagen inspiradora sobre {theme}"
 
 # Función para publicar en un canal
 async def post_to_channel(context, channel_name, content=None):
@@ -152,16 +141,17 @@ async def post_to_all_channels(context):
     for channel, result in results.items():
         admin_message += f"*{channel}*: {result}\n"
     
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=admin_message,
-        parse_mode='Markdown'
-    )
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_message,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error al enviar resumen al administrador: {e}")
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
     welcome_message = (
         "👋 *¡Bienvenido al Bot de Publicaciones Automáticas!*\n\n"
         "Este bot publica contenido automáticamente en varios canales temáticos.\n\n"
@@ -357,9 +347,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_state["post_time"] = selected_time
         save_state()
         
-        # Actualizar programación
-        schedule_posts(context)
-        
         await query.edit_message_text(
             f"✅ Hora de publicación establecida a las {selected_time}.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="settings_menu")]]),
@@ -386,9 +373,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         frequency = callback_data.replace("freq_", "")
         bot_state["post_frequency"] = frequency
         save_state()
-        
-        # Actualizar programación
-        schedule_posts(context)
         
         await query.edit_message_text(
             f"✅ Frecuencia establecida a {frequency}.",
@@ -517,12 +501,23 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Solo el administrador puede modificar la configuración.")
         return
     
-    await button_callback(Update(update_id=0, callback_query=type('obj', (object,), {
-        'data': 'settings_menu',
-        'from_user': type('obj', (object,), {'id': ADMIN_ID}),
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })), context)
+    auto_post_status = "✅ Activado" if bot_state["auto_post"] else "❌ Desactivado"
+    post_time = bot_state["post_time"]
+    frequency = bot_state["post_frequency"]
+    
+    keyboard = [
+        [InlineKeyboardButton(f"🔄 Auto-publicación: {auto_post_status}", callback_data="toggle_auto_post")],
+        [InlineKeyboardButton(f"⏰ Hora de publicación: {post_time}", callback_data="set_post_time")],
+        [InlineKeyboardButton(f"📅 Frecuencia: {frequency}", callback_data="set_frequency")],
+        [InlineKeyboardButton("🔙 Volver", callback_data="menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "⚙️ *Configuración*\n\nAjusta los parámetros del bot:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 # Comando /status
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -533,43 +528,92 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Solo el administrador puede ver el estado.")
         return
     
-    await button_callback(Update(update_id=0, callback_query=type('obj', (object,), {
-        'data': 'status',
-        'from_user': type('obj', (object,), {'id': ADMIN_ID}),
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })), context)
+    auto_post = "✅ Activado" if bot_state["auto_post"] else "❌ Desactivado"
+    post_time = bot_state["post_time"]
+    frequency = bot_state["post_frequency"]
+    
+    status_text = "*🔄 Estado Actual del Bot*\n\n"
+    status_text += f"*Auto-publicación:* {auto_post}\n"
+    status_text += f"*Hora de publicación:* {post_time}\n"
+    status_text += f"*Frecuencia:* {frequency}\n\n"
+    
+    status_text += "*Canales configurados:*\n"
+    for channel, data in CHANNELS.items():
+        status_text += f"{data['emoji']} *{channel}*\n"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        status_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 # Comando /help
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await button_callback(Update(update_id=0, callback_query=type('obj', (object,), {
-        'data': 'help',
-        'from_user': type('obj', (object,), {'id': update.effective_user.id}),
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })), context)
-
-# Función para programar las publicaciones
-def schedule_posts(context):
-    # Limpiar todas las tareas programadas anteriormente
-    schedule.clear()
-    
-    if bot_state["auto_post"]:
-        post_time = bot_state["post_time"]
+    help_text = (
+        "*❓ Ayuda del Bot*\n\n"
+        "*Comandos disponibles:*\n"
+        "/start - Iniciar el bot\n"
+        "/menu - Mostrar menú principal\n"
+        "/post - Publicar contenido manualmente\n"
+        "/settings - Configurar el bot\n"
+        "/status - Ver estado actual\n"
+        "/help - Mostrar esta ayuda\n\n"
         
-        if bot_state["post_frequency"] == "daily":
-            schedule.every().day.at(post_time).do(lambda: asyncio.create_task(post_to_all_channels(context)))
-        elif bot_state["post_frequency"] == "weekly":
-            schedule.every().monday.at(post_time).do(lambda: asyncio.create_task(post_to_all_channels(context)))
+        "*Funcionalidades:*\n"
+        "• Publicación automática en canales temáticos\n"
+        "• Generación de contenido con IA\n"
+        "• Programación de publicaciones\n"
+        "• Estadísticas de publicaciones\n\n"
+        
+        "*Temáticas disponibles:*\n"
+        "💪 Conexión fitness\n"
+        "💰 Criptomonedas\n"
+        "🌱 Vitalidad al límite\n"
+        "💎 Pensamientos de millonarios\n\n"
+        
+        "Para más información o soporte, contacta al administrador."
+    )
+    
+    keyboard = [[InlineKeyboardButton("📋 Menú Principal", callback_data="menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        help_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
-# Función para ejecutar las tareas programadas
-async def run_scheduled_tasks(context):
+# Tarea programada para publicar contenido
+async def scheduled_post(context):
+    if bot_state["auto_post"]:
+        logger.info("Ejecutando publicación programada")
+        await post_to_all_channels(context)
+
+# Función para mantener el bot activo (necesario en Render)
+async def keep_alive(context):
     while True:
-        schedule.run_pending()
-        await asyncio.sleep(60)  # Revisar cada minuto
+        logger.info("Bot activo - Keep alive ping")
+        current_hour = datetime.now().hour
+        current_minute = datetime.now().minute
+        
+        # Verificar si es hora de publicación
+        post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
+        
+        if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
+            logger.info("Ejecutando publicación programada")
+            await post_to_all_channels(context)
+        
+        # Esperar 60 segundos antes de la siguiente verificación
+        await asyncio.sleep(60)
 
 # Función principal
 async def main():
+    # Cargar estado previo
+    load_state()
+    
     # Crear la aplicación
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -584,24 +628,26 @@ async def main():
     # Registrar manejador de botones
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Programar publicaciones
-    schedule_posts(application)
-    
-    # Iniciar el ejecutor de tareas programadas en segundo plano
-    asyncio.create_task(run_scheduled_tasks(application))
-    
     # Iniciar el bot
     await application.initialize()
     await application.start()
+    
+    # Iniciar tarea de keep alive
+    asyncio.create_task(keep_alive(application))
+    
+    # Iniciar el polling
     await application.updater.start_polling()
     
-    # Mantener el bot ejecutándose hasta que se interrumpa manualmente
+    # Mantener el bot ejecutándose
     try:
-        await application.updater.stop()
-        await application.stop()
+        await asyncio.Future()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot detenido manualmente")
     finally:
         # Guardar el estado antes de salir
         save_state()
+        await application.updater.stop()
+        await application.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
