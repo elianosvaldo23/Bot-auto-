@@ -20,12 +20,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuración de OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "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")
+OPENAI_API_KEY =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
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
 # Configuración del bot
-BOT_TOKEN = os.getenv("7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "1742433244"))  # Valor predeterminado como respaldo
+BOT_TOKEN=7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw
+ADMIN_ID =1742433244
 
 # Definición de canales y sus temáticas
 CHANNELS = {
