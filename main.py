@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from openai import OpenAI
+from openai import OpenAI  # Mantenemos la misma biblioteca pero con configuración diferente
 import json
 
 # Configuración de logging
@@ -15,9 +15,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuración de OpenAI
-OPENAI_API_KEY = "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"
-client_openai = OpenAI(api_key=OPENAI_API_KEY)
+# Configuración de Google AI Studio (reemplaza OpenAI)
+GOOGLE_API_KEY = "AIzaSyBqNZnq8eHr5LMJ1yGZQU1rmw-Nmafy4TU"
+client_ai = OpenAI(
+    api_key=GOOGLE_API_KEY,
+    base_url="https://generativelanguage.googleapis.com/v1beta/"
+)
 
 # Configuración del bot
 BOT_TOKEN = "7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw"
@@ -66,7 +69,7 @@ def load_state():
     except Exception as e:
         logger.error(f"Error al cargar estado: {e}")
 
-# Función para generar contenido con OpenAI
+# Función para generar contenido con Google AI
 async def generate_content(theme):
     prompts = {
         "Conexión fitness": "Crea una publicación motivadora sobre fitness, ejercicio o vida saludable. Incluye un consejo práctico y una frase motivadora. Formato: título en negrita, 2-3 párrafos de contenido, y una conclusión inspiradora. Usa emojis relevantes.",
@@ -76,8 +79,9 @@ async def generate_content(theme):
     }
     
     try:
-        response = client_openai.chat.completions.create(
-            model="gpt-4o",
+        # Usando la API de Google Gemini a través de la interfaz compatible con OpenAI
+        response = client_ai.chat.completions.create(
+            model="gemini-1.5-flash", # Utilizamos el modelo de Gemini
             messages=[
                 {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Creas publicaciones atractivas, informativas y motivadoras."},
                 {"role": "user", "content": prompts[theme]}
