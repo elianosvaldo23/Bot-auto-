@@ -7,6 +7,7 @@ import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.error import BadRequest
 from openai import OpenAI
 import json
 from io import BytesIO
@@ -44,7 +45,7 @@ bot_state = {
     "last_posts": {},
     "post_frequency": "daily",  # daily, weekly, custom
     "custom_schedule": {},
-    "use_images": True,  # Nueva opción para controlar si se usan imágenes
+    "use_images": True,  # Opción para controlar si se usan imágenes
     "stats": {
         "total_posts": 0,
         "posts_per_channel": {channel: 0 for channel in CHANNELS},
@@ -122,6 +123,40 @@ def get_safe_image_url(theme):
     
     return random.choice(safe_images[theme])
 
+# Función para limpiar y validar HTML
+def clean_html(content):
+    """
+    Limpia el contenido HTML para que sea compatible con Telegram.
+    Telegram solo soporta las etiquetas: b, i, u, s, strike, del, 
+    code, pre, a, tg-spoiler, ins, em, strong, blockquote
+    """
+    # Reemplazar etiquetas no soportadas
+    replacements = [
+        ("<h1>", "<b>"),
+        ("</h1>", "</b>"),
+        ("<h2>", "<b>"),
+        ("</h2>", "</b>"),
+        ("<h3>", "<b>"),
+        ("</h3>", "</b>"),
+        ("<h4>", "<b>"),
+        ("</h4>", "</b>"),
+        ("<h5>", "<b>"),
+        ("</h5>", "</b>"),
+        ("<h6>", "<b>"),
+        ("</h6>", "</b>"),
+    ]
+    
+    for old, new in replacements:
+        content = content.replace(old, new)
+    
+    # Eliminar la palabra "html" si aparece
+    content = content.replace("html", "").replace("HTML", "")
+    
+    # Eliminar dobles saltos de línea
+    content = content.replace("\n\n\n", "\n\n")
+    
+    return content
+
 # Función para generar contenido con Google AI (mejorado para ser más corto y estético)
 async def generate_content(theme):
     # Comprobar si tenemos contenido en caché para este tema
@@ -144,13 +179,12 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
+        2. Incluye un título llamativo usando <b>negrita</b>
+        3. Usa solo estas etiquetas HTML permitidas: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Conexión fitness"])}
-        5. Una frase motivadora entre etiquetas de blockquote
+        5. Una frase motivadora entre etiquetas <blockquote></blockquote>
         6. No excedas las 50-60 palabras en total
-        7. NO incluyas la palabra "html" en ninguna parte del texto
-        8. El formato debe estar perfectamente aplicado, sin errores
+        7. NO uses etiquetas h1, h2, h3, etc. - solo las etiquetas especificadas arriba
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -164,13 +198,12 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
+        2. Incluye un título llamativo usando <b>negrita</b>
+        3. Usa solo estas etiquetas HTML permitidas: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Criptomonedas"])}
-        5. Un consejo o dato interesante entre etiquetas de blockquote
+        5. Un consejo o dato interesante entre etiquetas <blockquote></blockquote>
         6. No excedas las 50-60 palabras en total
-        7. NO incluyas la palabra "html" en ninguna parte del texto
-        8. El formato debe estar perfectamente aplicado, sin errores
+        7. NO uses etiquetas h1, h2, h3, etc. - solo las etiquetas especificadas arriba
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -184,13 +217,12 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
+        2. Incluye un título llamativo usando <b>negrita</b>
+        3. Usa solo estas etiquetas HTML permitidas: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Vitalidad al límite"])}
-        5. Un consejo de bienestar entre etiquetas de blockquote
+        5. Un consejo de bienestar entre etiquetas <blockquote></blockquote>
         6. No excedas las 50-60 palabras en total
-        7. NO incluyas la palabra "html" en ninguna parte del texto
-        8. El formato debe estar perfectamente aplicado, sin errores
+        7. NO uses etiquetas h1, h2, h3, etc. - solo las etiquetas especificadas arriba
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -204,13 +236,12 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
+        2. Incluye un título llamativo usando <b>negrita</b>
+        3. Usa solo estas etiquetas HTML permitidas: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Pensamientos de millonarios"])}
-        5. Una cita inspiradora entre etiquetas de blockquote
+        5. Una cita inspiradora entre etiquetas <blockquote></blockquote>
         6. No excedas las 50-60 palabras en total
-        7. NO incluyas la palabra "html" en ninguna parte del texto
-        8. El formato debe estar perfectamente aplicado, sin errores
+        7. NO uses etiquetas h1, h2, h3, etc. - solo las etiquetas especificadas arriba
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -226,7 +257,7 @@ async def generate_content(theme):
         response = client_ai.chat.completions.create(
             model="gemini-1.5-flash",
             messages=[
-                {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Creas publicaciones atractivas, concisas y visualmente impactantes con formato HTML. No incluyes la palabra 'html' en tus respuestas."},
+                {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Crea publicaciones atractivas, concisas y visualmente impactantes con formato HTML. Solo usar etiquetas HTML permitidas por Telegram: b, i, u, blockquote. No usar etiquetas h1, h2, h3, etc."},
                 {"role": "user", "content": prompts[theme]}
             ],
             temperature=0.7,
@@ -234,8 +265,8 @@ async def generate_content(theme):
         )
         content = response.choices[0].message.content
         
-        # Limpieza: eliminar la palabra "html" si aparece por algún motivo
-        content = content.replace("html", "").replace("HTML", "")
+        # Limpiar y validar el HTML
+        content = clean_html(content)
         
         return content
     except Exception as e:
@@ -253,6 +284,9 @@ async def post_to_channel(context, channel_name, content=None, use_image=None):
     
     if content is None:
         content = await generate_content(channel_name)
+    
+    # Limpiar y validar el HTML
+    content = clean_html(content)
     
     # Obtener URL de imagen si se requiere
     image_url = None
@@ -337,6 +371,33 @@ async def post_to_all_channels(context):
     except Exception as e:
         logger.error(f"Error al enviar resumen al administrador: {e}")
 
+# Función para editar un mensaje de manera segura
+async def safe_edit_message_text(query, text, reply_markup=None, parse_mode=None):
+    try:
+        await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            # Esto es normal, no es un error real
+            logger.info("Mensaje no modificado, contenido idéntico")
+        else:
+            # Otros errores de BadRequest son importantes
+            logger.error(f"Error al editar mensaje: {e}")
+            # Intentar enviar un mensaje alternativo
+            try:
+                await query.edit_message_text(
+                    text=f"{text}\n\n(Actualizado: {datetime.now().strftime('%H:%M:%S')})",
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            except Exception:
+                pass  # Si esto también falla, simplemente continuamos
+    except Exception as e:
+        logger.error(f"Error inesperado al editar mensaje: {e}")
+
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_message = (
@@ -402,7 +463,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Verificar si es administrador para la mayoría de las acciones
     if user_id != ADMIN_ID and not callback_data in ["help", "about"]:
-        await query.edit_message_text("⚠️ Solo el administrador puede usar esta función.")
+        await safe_edit_message_text(query, "⚠️ Solo el administrador puede usar esta función.")
         return
     
     if callback_data == "menu":
@@ -421,7 +482,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             "<b>🤖 Menú Principal</b>\n\nSelecciona una opción:",
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -439,7 +501,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             "<b>📝 Publicar Contenido</b>\n\nSelecciona un canal para publicar:",
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -457,7 +520,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             "<b>🔄 Opciones de publicación</b>\n\n¿Deseas incluir una imagen en esta publicación?",
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -467,7 +531,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_or_all = callback_data.replace("publish_with_image_", "")
         
         if channel_or_all == "all":
-            await query.edit_message_text("🔄 Publicando en todos los canales con imágenes... Esto puede tomar un momento.")
+            await safe_edit_message_text(query, "🔄 Publicando en todos los canales con imágenes... Esto puede tomar un momento.", parse_mode='HTML')
             # Pre-generar contenido para todos los canales para evitar repetición
             for channel in CHANNELS:
                 bot_state["content_cache"][channel] = await generate_content(channel)
@@ -491,13 +555,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.edit_message_text(
+            await safe_edit_message_text(
+                query,
                 f"<b>✅ Publicación Completada</b>\n\n{admin_message}",
                 reply_markup=reply_markup,
                 parse_mode='HTML'
             )
         else:
-            await query.edit_message_text(f"🔄 Generando contenido para {channel_or_all} con imagen...")
+            await safe_edit_message_text(query, f"🔄 Generando contenido para {channel_or_all} con imagen...", parse_mode='HTML')
             success, result = await post_to_channel(context, channel_or_all, use_image=True)
             
             # Mensaje de confirmación con botón para volver
@@ -505,13 +570,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             if success:
-                await query.edit_message_text(
+                await safe_edit_message_text(
+                    query,
                     f"<b>✅ Publicación Exitosa</b>\n\nSe ha publicado contenido con imagen en el canal {channel_or_all}.",
                     reply_markup=reply_markup,
                     parse_mode='HTML'
                 )
             else:
-                await query.edit_message_text(
+                await safe_edit_message_text(
+                    query,
                     f"<b>❌ Error al Publicar</b>\n\nNo se pudo publicar en {channel_or_all}.\nError: {result}",
                     reply_markup=reply_markup,
                     parse_mode='HTML'
@@ -521,7 +588,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_or_all = callback_data.replace("publish_without_image_", "")
         
         if channel_or_all == "all":
-            await query.edit_message_text("🔄 Publicando en todos los canales sin imágenes... Esto puede tomar un momento.")
+            await safe_edit_message_text(query, "🔄 Publicando en todos los canales sin imágenes... Esto puede tomar un momento.", parse_mode='HTML')
             # Pre-generar contenido para todos los canales para evitar repetición
             for channel in CHANNELS:
                 bot_state["content_cache"][channel] = await generate_content(channel)
@@ -545,13 +612,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.edit_message_text(
+            await safe_edit_message_text(
+                query,
                 f"<b>✅ Publicación Completada</b>\n\n{admin_message}",
                 reply_markup=reply_markup,
                 parse_mode='HTML'
             )
         else:
-            await query.edit_message_text(f"🔄 Generando contenido para {channel_or_all} sin imagen...")
+            await safe_edit_message_text(query, f"🔄 Generando contenido para {channel_or_all} sin imagen...", parse_mode='HTML')
             success, result = await post_to_channel(context, channel_or_all, use_image=False)
             
             # Mensaje de confirmación con botón para volver
@@ -559,13 +627,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             if success:
-                await query.edit_message_text(
+                await safe_edit_message_text(
+                    query,
                     f"<b>✅ Publicación Exitosa</b>\n\nSe ha publicado contenido sin imagen en el canal {channel_or_all}.",
                     reply_markup=reply_markup,
                     parse_mode='HTML'
                 )
             else:
-                await query.edit_message_text(
+                await safe_edit_message_text(
+                    query,
                     f"<b>❌ Error al Publicar</b>\n\nNo se pudo publicar en {channel_or_all}.\nError: {result}",
                     reply_markup=reply_markup,
                     parse_mode='HTML'
@@ -586,7 +656,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             "<b>⚙️ Configuración</b>\n\nAjusta los parámetros del bot:",
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -596,14 +667,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_state["auto_post"] = not bot_state["auto_post"]
         save_state()
         
-        # Redireccionar al menú de configuración
+        # Redireccionar al menú de configuración con un timestamp para evitar error de mensaje no modificado
+        await safe_edit_message_text(
+            query,
+            f"<b>⚙️ Configuración actualizada</b>\n\nAuto-publicación: {'✅ Activada' if bot_state['auto_post'] else '❌ Desactivada'}\n\n<i>Volviendo al menú de configuración...</i>",
+            parse_mode='HTML'
+        )
+        # Pequeña pausa para mostrar la confirmación
+        await asyncio.sleep(1.5)
+        # Redirigir
+        callback_data = "settings_menu"
         await button_callback(update, context)
     
     elif callback_data == "toggle_use_images":
         bot_state["use_images"] = not bot_state["use_images"]
         save_state()
         
-        # Redireccionar al menú de configuración
+        # Redireccionar al menú de configuración con un timestamp para evitar error de mensaje no modificado
+        await safe_edit_message_text(
+            query,
+            f"<b>⚙️ Configuración actualizada</b>\n\nUsar imágenes: {'✅ Activado' if bot_state['use_images'] else '❌ Desactivado'}\n\n<i>Volviendo al menú de configuración...</i>",
+            parse_mode='HTML'
+        )
+        # Pequeña pausa para mostrar la confirmación
+        await asyncio.sleep(1.5)
+        # Redirigir
+        callback_data = "settings_menu"
         await button_callback(update, context)
     
     elif callback_data == "set_post_time":
@@ -621,7 +710,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="settings_menu")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             "<b>⏰ Configurar Hora de Publicación</b>\n\nSelecciona la hora para las publicaciones automáticas:",
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -632,11 +722,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_state["post_time"] = selected_time
         save_state()
         
-        await query.edit_message_text(
-            f"✅ Hora de publicación establecida a las {selected_time}.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="settings_menu")]]),
+        await safe_edit_message_text(
+            query,
+            f"✅ Hora de publicación establecida a las {selected_time}.\n\n<i>Volviendo al menú de configuración...</i>",
             parse_mode='HTML'
         )
+        # Pequeña pausa para mostrar la confirmación
+        await asyncio.sleep(1.5)
+        # Redirigir al menú de configuración
+        callback_data = "settings_menu"
+        await button_callback(update, context)
     
     elif callback_data == "set_frequency":
         keyboard = [
@@ -648,7 +743,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             "<b>📅 Configurar Frecuencia</b>\n\nSelecciona con qué frecuencia se publicará el contenido:",
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -659,11 +755,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_state["post_frequency"] = frequency
         save_state()
         
-        await query.edit_message_text(
-            f"✅ Frecuencia establecida a {frequency}.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="settings_menu")]]),
+        await safe_edit_message_text(
+            query,
+            f"✅ Frecuencia establecida a {frequency}.\n\n<i>Volviendo al menú de configuración...</i>",
             parse_mode='HTML'
         )
+        # Pequeña pausa para mostrar la confirmación
+        await asyncio.sleep(1.5)
+        # Redirigir
+        callback_data = "settings_menu"
+        await button_callback(update, context)
     
     elif callback_data == "stats":
         total_posts = bot_state["stats"]["total_posts"]
@@ -690,7 +791,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             stats_text,
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -715,7 +817,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             status_text,
             reply_markup=reply_markup,
             parse_mode='HTML'
@@ -751,7 +854,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             help_text,
             reply_markup=reply_markup,
             parse_mode='HTML'
