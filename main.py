@@ -606,7 +606,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Programación de publicaciones\n"
             "• Estadísticas de publicaciones\n\n"
             
-            "<b>Temáticas disponibles:</b>\n"
+            "*Temáticas disponibles:*\n"
             "💪 Conexión fitness\n"
             "💰 Criptomonedas\n"
             "🌱 Vitalidad al límite\n"
@@ -615,13 +615,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Para más información o soporte, contacta al administrador."
         )
         
-         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
             help_text,
             reply_markup=reply_markup,
-            parse_mode='HTML'
+            parse_mode='Markdown'
         )
 
 # Comando /post
