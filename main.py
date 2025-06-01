@@ -2,14 +2,13 @@ import os
 import logging
 import asyncio
 import time
-import base64
+import random
 import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from openai import OpenAI
 import json
-import tempfile
 from io import BytesIO
 
 # Configuración de logging
@@ -45,11 +44,13 @@ bot_state = {
     "last_posts": {},
     "post_frequency": "daily",  # daily, weekly, custom
     "custom_schedule": {},
+    "use_images": True,  # Nueva opción para controlar si se usan imágenes
     "stats": {
         "total_posts": 0,
         "posts_per_channel": {channel: 0 for channel in CHANNELS},
         "with_images": 0
-    }
+    },
+    "content_cache": {}  # Cache para evitar repetición de contenido
 }
 
 # Función para guardar el estado del bot
@@ -68,74 +69,68 @@ def load_state():
         with open('bot_state.json', 'r') as f:
             bot_state = json.load(f)
         logger.info("Estado del bot cargado correctamente")
+        
+        # Asegurar que existen las claves necesarias
+        if "use_images" not in bot_state:
+            bot_state["use_images"] = True
+        if "content_cache" not in bot_state:
+            bot_state["content_cache"] = {}
+        if "with_images" not in bot_state.get("stats", {}):
+            if "stats" not in bot_state:
+                bot_state["stats"] = {}
+            bot_state["stats"]["with_images"] = 0
+            
     except FileNotFoundError:
         logger.info("Archivo de estado no encontrado, usando valores predeterminados")
         save_state()
     except Exception as e:
         logger.error(f"Error al cargar estado: {e}")
 
-# Función para generar imágenes con Google AI
-async def generate_image(theme):
-    # Prompts específicos para cada tema
-    image_prompts = {
-        "Conexión fitness": "A beautiful minimalist fitness motivation image with vibrant colors, showing athletic silhouettes, stylish and modern design, inspirational, Instagram-worthy, professional quality",
-        "Criptomonedas": "A sleek cryptocurrency illustration with modern design, digital currency symbols, blockchain visualization, futuristic, professional financial graphic, clean lines, dark blue and gold colors",
-        "Vitalidad al límite": "A serene wellness image showing natural elements, peaceful zen garden, holistic health symbols, organic colors, minimal design, high-quality photography style, Instagram aesthetic",
-        "Pensamientos de millonarios": "An elegant luxury minimalist image representing success and wealth mindset, gold accents, modern entrepreneur aesthetic, professional quality, inspirational, sleek design"
+# Función para verificar URL de imagen
+def is_valid_image_url(url):
+    try:
+        response = requests.head(url, timeout=5)
+        return response.status_code == 200 and response.headers.get('content-type', '').startswith('image/')
+    except Exception:
+        return False
+
+# Función para obtener imágenes de stock confiables
+def get_safe_image_url(theme):
+    # URLs de imágenes verificadas y seguras
+    safe_images = {
+        "Conexión fitness": [
+            "https://cdn.pixabay.com/photo/2017/08/07/14/02/man-2604149_640.jpg",
+            "https://cdn.pixabay.com/photo/2014/12/20/09/18/running-573762_640.jpg",
+            "https://cdn.pixabay.com/photo/2016/11/22/22/25/adventure-1850912_640.jpg"
+        ],
+        "Criptomonedas": [
+            "https://cdn.pixabay.com/photo/2018/01/18/07/31/bitcoin-3089728_640.jpg",
+            "https://cdn.pixabay.com/photo/2017/12/12/12/44/bitcoin-3014614_640.jpg",
+            "https://cdn.pixabay.com/photo/2018/01/27/09/36/crypto-3111490_640.jpg"
+        ],
+        "Vitalidad al límite": [
+            "https://cdn.pixabay.com/photo/2017/03/26/21/54/yoga-2176668_640.jpg",
+            "https://cdn.pixabay.com/photo/2017/04/08/22/26/buddhism-2214532_640.jpg",
+            "https://cdn.pixabay.com/photo/2016/11/18/13/47/spa-1834731_640.jpg"
+        ],
+        "Pensamientos de millonarios": [
+            "https://cdn.pixabay.com/photo/2018/01/17/04/14/stock-exchange-3087396_640.jpg",
+            "https://cdn.pixabay.com/photo/2016/10/09/19/19/coins-1726618_640.jpg",
+            "https://cdn.pixabay.com/photo/2016/08/20/20/45/startup-1608642_640.jpg"
+        ]
     }
     
-    try:
-        # Aquí usaríamos la API de generación de imágenes
-        # Como no podemos usar directamente la API de imagen con el código proporcionado,
-        # vamos a implementar una función que simula una URL de imagen
-        # En producción, esto debería reemplazarse por una llamada real a la API de generación de imágenes
-        
-        # Opciones de imágenes de stock por tema para simular la generación
-        stock_images = {
-            "Conexión fitness": [
-                "https://images.unsplash.com/photo-1517836357463-d25dfeac3438",
-                "https://images.unsplash.com/photo-1518611012118-696072aa579a",
-                "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b"
-            ],
-            "Criptomonedas": [
-                "https://images.unsplash.com/photo-1621504450181-5d356f61d307",
-                "https://images.unsplash.com/photo-1621761191319-c6fb62004040",
-                "https://images.unsplash.com/photo-1621501103258-3e135c8c1fda"
-            ],
-            "Vitalidad al límite": [
-                "https://images.unsplash.com/photo-1532187643603-ba119ca4109e",
-                "https://images.unsplash.com/photo-1545205597-3d9d02c29597",
-                "https://images.unsplash.com/photo-1600618528240-fb9fc964eca8"
-            ],
-            "Pensamientos de millonarios": [
-                "https://images.unsplash.com/photo-1626266063343-838d5a257e3a",
-                "https://images.unsplash.com/photo-1634757439914-e7ffd8866a56",
-                "https://images.unsplash.com/photo-1589666564459-93cdd3ab856a"
-            ]
-        }
-        
-        # Seleccionar una imagen aleatoria del tema
-        import random
-        return random.choice(stock_images[theme])
-        
-        # NOTA: En producción, aquí deberías usar una API real de generación de imágenes
-        # Por ejemplo, podrías usar esto (comentado por ahora):
-        """
-        response = client_ai.images.generate(
-            model="imagegeneration",
-            prompt=image_prompts[theme],
-            size="1024x1024",
-            n=1
-        )
-        return response.data[0].url
-        """
-        
-    except Exception as e:
-        logger.error(f"Error al generar imagen: {e}")
-        return None
+    return random.choice(safe_images[theme])
 
 # Función para generar contenido con Google AI (mejorado para ser más corto y estético)
 async def generate_content(theme):
+    # Comprobar si tenemos contenido en caché para este tema
+    if theme in bot_state["content_cache"]:
+        # Eliminar el contenido de la caché después de usarlo
+        content = bot_state["content_cache"].pop(theme)
+        save_state()
+        return content
+    
     # Emojis temáticos para cada categoría
     theme_emojis = {
         "Conexión fitness": ["💪", "🏋️‍♀️", "🏃‍♂️", "🧘‍♀️", "🥗", "🔥", "🏆", "⚡", "🚴‍♂️", "💯"],
@@ -149,11 +144,13 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML <b>Título</b>
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Conexión fitness"])}
-        5. Una frase motivadora entre <blockquote></blockquote>
+        5. Una frase motivadora entre etiquetas de blockquote
         6. No excedas las 50-60 palabras en total
+        7. NO incluyas la palabra "html" en ninguna parte del texto
+        8. El formato debe estar perfectamente aplicado, sin errores
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -167,11 +164,13 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML <b>Título</b>
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Criptomonedas"])}
-        5. Un consejo o dato interesante entre <blockquote></blockquote>
+        5. Un consejo o dato interesante entre etiquetas de blockquote
         6. No excedas las 50-60 palabras en total
+        7. NO incluyas la palabra "html" en ninguna parte del texto
+        8. El formato debe estar perfectamente aplicado, sin errores
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -185,11 +184,13 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML <b>Título</b>
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Vitalidad al límite"])}
-        5. Un consejo de bienestar entre <blockquote></blockquote>
+        5. Un consejo de bienestar entre etiquetas de blockquote
         6. No excedas las 50-60 palabras en total
+        7. NO incluyas la palabra "html" en ninguna parte del texto
+        8. El formato debe estar perfectamente aplicado, sin errores
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -203,11 +204,13 @@ async def generate_content(theme):
         
         Requisitos:
         1. Máximo 3-4 oraciones en total (muy conciso)
-        2. Incluye un título llamativo en formato HTML <b>Título</b>
-        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        2. Incluye un título llamativo en formato HTML (sin incluir la palabra "html")
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i> o <u>subrayado</u>
         4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Pensamientos de millonarios"])}
-        5. Una cita inspiradora entre <blockquote></blockquote>
+        5. Una cita inspiradora entre etiquetas de blockquote
         6. No excedas las 50-60 palabras en total
+        7. NO incluyas la palabra "html" en ninguna parte del texto
+        8. El formato debe estar perfectamente aplicado, sin errores
         
         Ejemplo de estructura:
         <b>TÍTULO IMPACTANTE</b>
@@ -223,43 +226,63 @@ async def generate_content(theme):
         response = client_ai.chat.completions.create(
             model="gemini-1.5-flash",
             messages=[
-                {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Creas publicaciones atractivas, concisas y visualmente impactantes con formato HTML."},
+                {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Creas publicaciones atractivas, concisas y visualmente impactantes con formato HTML. No incluyes la palabra 'html' en tus respuestas."},
                 {"role": "user", "content": prompts[theme]}
             ],
             temperature=0.7,
             max_tokens=200
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        
+        # Limpieza: eliminar la palabra "html" si aparece por algún motivo
+        content = content.replace("html", "").replace("HTML", "")
+        
+        return content
     except Exception as e:
         logger.error(f"Error al generar contenido: {e}")
-        return f"❌ No se pudo generar contenido para {theme} debido a un error. Por favor, intenta más tarde."
+        return f"<b>¡Inspiración diaria!</b>\n\n{CHANNELS[theme]['emoji']} No pudimos generar contenido personalizado esta vez, ¡pero seguimos adelante con energía positiva! {CHANNELS[theme]['emoji']}\n\n<blockquote>La constancia es la clave del éxito.</blockquote>"
 
 # Función para publicar en un canal
-async def post_to_channel(context, channel_name, content=None, image_url=None):
+async def post_to_channel(context, channel_name, content=None, use_image=None):
     channel_id = CHANNELS[channel_name]["id"]
     emoji = CHANNELS[channel_name]["emoji"]
+    
+    # Si use_image no se especifica, usar la configuración global
+    if use_image is None:
+        use_image = bot_state["use_images"]
     
     if content is None:
         content = await generate_content(channel_name)
     
-    if image_url is None:
-        image_url = await generate_image(channel_name)
+    # Obtener URL de imagen si se requiere
+    image_url = None
+    if use_image:
+        image_url = get_safe_image_url(channel_name)
     
-    # Añadir firma y emoji temático
+    # Añadir firma sin espacios innecesarios
     current_date = datetime.now().strftime("%d/%m/%Y")
-    signature = f"\n\n{emoji} <b>{channel_name}</b> | {current_date}"
-    full_content = f"{content}\n{signature}"
+    signature = f"\n{emoji} <b>{channel_name}</b> | {current_date}"
+    full_content = f"{content}{signature}"
     
     try:
-        if image_url:
-            # Enviar mensaje con imagen
-            message = await context.bot.send_photo(
-                chat_id=channel_id,
-                photo=image_url,
-                caption=full_content,
-                parse_mode='HTML'
-            )
-            bot_state["stats"]["with_images"] += 1
+        if use_image and image_url:
+            # Verificar que la URL de la imagen es válida
+            if is_valid_image_url(image_url):
+                # Enviar mensaje con imagen
+                message = await context.bot.send_photo(
+                    chat_id=channel_id,
+                    photo=image_url,
+                    caption=full_content,
+                    parse_mode='HTML'
+                )
+                bot_state["stats"]["with_images"] += 1
+            else:
+                # Si la URL de la imagen no es válida, enviar solo texto
+                message = await context.bot.send_message(
+                    chat_id=channel_id,
+                    text=full_content,
+                    parse_mode='HTML'
+                )
         else:
             # Enviar mensaje solo texto
             message = await context.bot.send_message(
@@ -274,7 +297,7 @@ async def post_to_channel(context, channel_name, content=None, image_url=None):
         bot_state["last_posts"][channel_name] = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "message_id": message.message_id,
-            "has_image": image_url is not None
+            "has_image": use_image and image_url is not None
         }
         save_state()
         
@@ -286,9 +309,19 @@ async def post_to_channel(context, channel_name, content=None, image_url=None):
 # Función para publicar en todos los canales
 async def post_to_all_channels(context):
     results = {}
+    
+    # Pre-generar contenido para todos los canales para evitar repetición
+    for channel in CHANNELS:
+        bot_state["content_cache"][channel] = await generate_content(channel)
+    save_state()
+    
     for channel in CHANNELS:
         success, result = await post_to_channel(context, channel)
         results[channel] = "✅ Publicado" if success else f"❌ Error: {result}"
+    
+    # Limpiar caché si quedó algo
+    bot_state["content_cache"] = {}
+    save_state()
     
     # Notificar al administrador
     admin_message = "<b>Resumen de publicaciones automáticas:</b>\n\n"
@@ -398,10 +431,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         # Botón para cada canal
         for channel in CHANNELS:
-            keyboard.append([InlineKeyboardButton(f"{CHANNELS[channel]['emoji']} {channel}", callback_data=f"publish_{channel}")])
+            keyboard.append([InlineKeyboardButton(f"{CHANNELS[channel]['emoji']} {channel}", callback_data=f"publish_select_{channel}")])
         
         # Botón para publicar en todos los canales
-        keyboard.append([InlineKeyboardButton("🔄 Publicar en Todos", callback_data="publish_all")])
+        keyboard.append([InlineKeyboardButton("🔄 Publicar en Todos", callback_data="publish_select_all")])
         keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="menu")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -412,25 +445,60 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     
-    elif callback_data.startswith("publish_"):
-        channel_name = callback_data.replace("publish_", "")
+    elif callback_data.startswith("publish_select_"):
+        channel_or_all = callback_data.replace("publish_select_", "")
         
-        if channel_name == "all":
-            await query.edit_message_text("🔄 Publicando en todos los canales... Esto puede tomar un momento.")
-            await post_to_all_channels(context)
+        # Mostrar opciones para incluir imagen o no
+        keyboard = [
+            [InlineKeyboardButton("📷 Con imagen", callback_data=f"publish_with_image_{channel_or_all}")],
+            [InlineKeyboardButton("📝 Solo texto", callback_data=f"publish_without_image_{channel_or_all}")],
+            [InlineKeyboardButton("🔙 Volver", callback_data="publish_menu")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "<b>🔄 Opciones de publicación</b>\n\n¿Deseas incluir una imagen en esta publicación?",
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+    
+    elif callback_data.startswith("publish_with_image_"):
+        channel_or_all = callback_data.replace("publish_with_image_", "")
+        
+        if channel_or_all == "all":
+            await query.edit_message_text("🔄 Publicando en todos los canales con imágenes... Esto puede tomar un momento.")
+            # Pre-generar contenido para todos los canales para evitar repetición
+            for channel in CHANNELS:
+                bot_state["content_cache"][channel] = await generate_content(channel)
+            save_state()
+            
+            results = {}
+            for channel in CHANNELS:
+                success, result = await post_to_channel(context, channel, use_image=True)
+                results[channel] = "✅ Publicado" if success else f"❌ Error: {result}"
+            
+            # Limpiar caché si quedó algo
+            bot_state["content_cache"] = {}
+            save_state()
+            
+            # Notificar al administrador
+            admin_message = "<b>Resumen de publicaciones automáticas:</b>\n\n"
+            for channel, result in results.items():
+                admin_message += f"<b>{channel}</b>: {result}\n"
             
             # Mensaje de confirmación con botón para volver
             keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "<b>✅ Publicación Completada</b>\n\nSe ha publicado contenido en todos los canales.",
+                f"<b>✅ Publicación Completada</b>\n\n{admin_message}",
                 reply_markup=reply_markup,
                 parse_mode='HTML'
             )
         else:
-            await query.edit_message_text(f"🔄 Generando contenido para {channel_name}...")
-            success, result = await post_to_channel(context, channel_name)
+            await query.edit_message_text(f"🔄 Generando contenido para {channel_or_all} con imagen...")
+            success, result = await post_to_channel(context, channel_or_all, use_image=True)
             
             # Mensaje de confirmación con botón para volver
             keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
@@ -438,13 +506,67 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if success:
                 await query.edit_message_text(
-                    f"<b>✅ Publicación Exitosa</b>\n\nSe ha publicado contenido en el canal {channel_name}.",
+                    f"<b>✅ Publicación Exitosa</b>\n\nSe ha publicado contenido con imagen en el canal {channel_or_all}.",
                     reply_markup=reply_markup,
                     parse_mode='HTML'
                 )
             else:
                 await query.edit_message_text(
-                    f"<b>❌ Error al Publicar</b>\n\nNo se pudo publicar en {channel_name}.\nError: {result}",
+                    f"<b>❌ Error al Publicar</b>\n\nNo se pudo publicar en {channel_or_all}.\nError: {result}",
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
+    
+    elif callback_data.startswith("publish_without_image_"):
+        channel_or_all = callback_data.replace("publish_without_image_", "")
+        
+        if channel_or_all == "all":
+            await query.edit_message_text("🔄 Publicando en todos los canales sin imágenes... Esto puede tomar un momento.")
+            # Pre-generar contenido para todos los canales para evitar repetición
+            for channel in CHANNELS:
+                bot_state["content_cache"][channel] = await generate_content(channel)
+            save_state()
+            
+            results = {}
+            for channel in CHANNELS:
+                success, result = await post_to_channel(context, channel, use_image=False)
+                results[channel] = "✅ Publicado" if success else f"❌ Error: {result}"
+            
+            # Limpiar caché si quedó algo
+            bot_state["content_cache"] = {}
+            save_state()
+            
+            # Notificar al administrador
+            admin_message = "<b>Resumen de publicaciones automáticas:</b>\n\n"
+            for channel, result in results.items():
+                admin_message += f"<b>{channel}</b>: {result}\n"
+            
+            # Mensaje de confirmación con botón para volver
+            keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"<b>✅ Publicación Completada</b>\n\n{admin_message}",
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        else:
+            await query.edit_message_text(f"🔄 Generando contenido para {channel_or_all} sin imagen...")
+            success, result = await post_to_channel(context, channel_or_all, use_image=False)
+            
+            # Mensaje de confirmación con botón para volver
+            keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if success:
+                await query.edit_message_text(
+                    f"<b>✅ Publicación Exitosa</b>\n\nSe ha publicado contenido sin imagen en el canal {channel_or_all}.",
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
+            else:
+                await query.edit_message_text(
+                    f"<b>❌ Error al Publicar</b>\n\nNo se pudo publicar en {channel_or_all}.\nError: {result}",
                     reply_markup=reply_markup,
                     parse_mode='HTML'
                 )
@@ -453,9 +575,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_post_status = "✅ Activado" if bot_state["auto_post"] else "❌ Desactivado"
         post_time = bot_state["post_time"]
         frequency = bot_state["post_frequency"]
+        use_images_status = "✅ Activado" if bot_state["use_images"] else "❌ Desactivado"
         
         keyboard = [
             [InlineKeyboardButton(f"🔄 Auto-publicación: {auto_post_status}", callback_data="toggle_auto_post")],
+            [InlineKeyboardButton(f"📷 Usar imágenes: {use_images_status}", callback_data="toggle_use_images")],
             [InlineKeyboardButton(f"⏰ Hora de publicación: {post_time}", callback_data="set_post_time")],
             [InlineKeyboardButton(f"📅 Frecuencia: {frequency}", callback_data="set_frequency")],
             [InlineKeyboardButton("🔙 Volver", callback_data="menu")]
@@ -470,6 +594,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif callback_data == "toggle_auto_post":
         bot_state["auto_post"] = not bot_state["auto_post"]
+        save_state()
+        
+        # Redireccionar al menú de configuración
+        await button_callback(update, context)
+    
+    elif callback_data == "toggle_use_images":
+        bot_state["use_images"] = not bot_state["use_images"]
         save_state()
         
         # Redireccionar al menú de configuración
@@ -569,9 +700,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_post = "✅ Activado" if bot_state["auto_post"] else "❌ Desactivado"
         post_time = bot_state["post_time"]
         frequency = bot_state["post_frequency"]
+        use_images = "✅ Activado" if bot_state["use_images"] else "❌ Desactivado"
         
         status_text = "<b>🔄 Estado Actual del Bot</b>\n\n"
         status_text += f"<b>Auto-publicación:</b> {auto_post}\n"
+        status_text += f"<b>Usar imágenes:</b> {use_images}\n"
         status_text += f"<b>Hora de publicación:</b> {post_time}\n"
         status_text += f"<b>Frecuencia:</b> {frequency}\n\n"
         
@@ -606,7 +739,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Programación de publicaciones\n"
             "• Estadísticas de publicaciones\n\n"
             
-            "*Temáticas disponibles:*\n"
+            "<b>Temáticas disponibles:</b>\n"
             "💪 Conexión fitness\n"
             "💰 Criptomonedas\n"
             "🌱 Vitalidad al límite\n"
@@ -621,7 +754,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             help_text,
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
 
 # Comando /post
@@ -636,10 +769,10 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     # Botón para cada canal
     for channel in CHANNELS:
-        keyboard.append([InlineKeyboardButton(f"{CHANNELS[channel]['emoji']} {channel}", callback_data=f"publish_{channel}")])
+        keyboard.append([InlineKeyboardButton(f"{CHANNELS[channel]['emoji']} {channel}", callback_data=f"publish_select_{channel}")])
     
     # Botón para publicar en todos los canales
-    keyboard.append([InlineKeyboardButton("🔄 Publicar en Todos", callback_data="publish_all")])
+    keyboard.append([InlineKeyboardButton("🔄 Publicar en Todos", callback_data="publish_select_all")])
     keyboard.append([InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -662,9 +795,11 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auto_post_status = "✅ Activado" if bot_state["auto_post"] else "❌ Desactivado"
     post_time = bot_state["post_time"]
     frequency = bot_state["post_frequency"]
+    use_images_status = "✅ Activado" if bot_state["use_images"] else "❌ Desactivado"
     
     keyboard = [
         [InlineKeyboardButton(f"🔄 Auto-publicación: {auto_post_status}", callback_data="toggle_auto_post")],
+        [InlineKeyboardButton(f"📷 Usar imágenes: {use_images_status}", callback_data="toggle_use_images")],
         [InlineKeyboardButton(f"⏰ Hora de publicación: {post_time}", callback_data="set_post_time")],
         [InlineKeyboardButton(f"📅 Frecuencia: {frequency}", callback_data="set_frequency")],
         [InlineKeyboardButton("🔙 Volver", callback_data="menu")]
@@ -689,9 +824,11 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auto_post = "✅ Activado" if bot_state["auto_post"] else "❌ Desactivado"
     post_time = bot_state["post_time"]
     frequency = bot_state["post_frequency"]
+    use_images = "✅ Activado" if bot_state["use_images"] else "❌ Desactivado"
     
     status_text = "<b>🔄 Estado Actual del Bot</b>\n\n"
     status_text += f"<b>Auto-publicación:</b> {auto_post}\n"
+    status_text += f"<b>Usar imágenes:</b> {use_images}\n"
     status_text += f"<b>Hora de publicación:</b> {post_time}\n"
     status_text += f"<b>Frecuencia:</b> {frequency}\n\n"
     
@@ -767,70 +904,6 @@ async def keep_alive(context):
         
         # Esperar 60 segundos antes de la siguiente verificación
         await asyncio.sleep(60)
-
-# Función para hacer una solicitud de imagen real a Google Gemini
-async def generate_real_image(theme, client_ai, api_key):
-    # Prompts específicos para cada tema
-    image_prompts = {
-        "Conexión fitness": "A beautiful minimalist fitness motivation image with vibrant colors, showing athletic silhouettes, inspirational, Instagram-worthy, professional quality",
-        "Criptomonedas": "A sleek cryptocurrency illustration with modern design, digital currency symbols, blockchain visualization, futuristic, professional financial graphic, clean lines",
-        "Vitalidad al límite": "A serene wellness image showing natural elements, peaceful zen garden, holistic health symbols, organic colors, minimal design, high-quality photography style",
-        "Pensamientos de millonarios": "An elegant luxury minimalist image representing success and wealth mindset, gold accents, modern entrepreneur aesthetic, professional quality, inspirational design"
-    }
-    
-    try:
-        # Para una implementación real usando Gemini Pro Vision, necesitaríamos una API específica que soporte generación de imágenes
-        # Esta es una implementación de ejemplo que debería adaptarse según la API disponible
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateImage"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        data = {
-            "prompt": {
-                "text": image_prompts[theme]
-            },
-            "size": {
-                "width": 1024,
-                "height": 1024
-            }
-        }
-        
-        # Nota: Esta parte es teórica, la implementación real dependería de la API específica
-        # response = requests.post(url, json=data, headers=headers)
-        # if response.status_code == 200:
-        #     return response.json().get("image", {}).get("url")
-        
-        # Por ahora volvemos al método de imágenes de stock
-        stock_images = {
-            "Conexión fitness": [
-                "https://images.unsplash.com/photo-1517836357463-d25dfeac3438",
-                "https://images.unsplash.com/photo-1518611012118-696072aa579a",
-                "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b"
-            ],
-            "Criptomonedas": [
-                "https://images.unsplash.com/photo-1621504450181-5d356f61d307",
-                "https://images.unsplash.com/photo-1621761191319-c6fb62004040",
-                "https://images.unsplash.com/photo-1621501103258-3e135c8c1fda"
-            ],
-            "Vitalidad al límite": [
-                "https://images.unsplash.com/photo-1532187643603-ba119ca4109e",
-                "https://images.unsplash.com/photo-1545205597-3d9d02c29597",
-                "https://images.unsplash.com/photo-1600618528240-fb9fc964eca8"
-            ],
-            "Pensamientos de millonarios": [
-                "https://images.unsplash.com/photo-1626266063343-838d5a257e3a",
-                "https://images.unsplash.com/photo-1634757439914-e7ffd8866a56",
-                "https://images.unsplash.com/photo-1589666564459-93cdd3ab856a"
-            ]
-        }
-        
-        import random
-        return random.choice(stock_images[theme])
-        
-    except Exception as e:
-        logger.error(f"Error al generar imagen real: {e}")
-        return None
 
 # Función principal
 async def main():
