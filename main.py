@@ -2,11 +2,15 @@ import os
 import logging
 import asyncio
 import time
+import base64
+import requests
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from openai import OpenAI  # Mantenemos la misma biblioteca pero con configuración diferente
+from openai import OpenAI
 import json
+import tempfile
+from io import BytesIO
 
 # Configuración de logging
 logging.basicConfig(
@@ -15,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuración de Google AI Studio (reemplaza OpenAI)
+# Configuración de Google AI Studio
 GOOGLE_API_KEY = "AIzaSyBqNZnq8eHr5LMJ1yGZQU1rmw-Nmafy4TU"
 client_ai = OpenAI(
     api_key=GOOGLE_API_KEY,
@@ -43,7 +47,8 @@ bot_state = {
     "custom_schedule": {},
     "stats": {
         "total_posts": 0,
-        "posts_per_channel": {channel: 0 for channel in CHANNELS}
+        "posts_per_channel": {channel: 0 for channel in CHANNELS},
+        "with_images": 0
     }
 }
 
@@ -69,25 +74,160 @@ def load_state():
     except Exception as e:
         logger.error(f"Error al cargar estado: {e}")
 
-# Función para generar contenido con Google AI
+# Función para generar imágenes con Google AI
+async def generate_image(theme):
+    # Prompts específicos para cada tema
+    image_prompts = {
+        "Conexión fitness": "A beautiful minimalist fitness motivation image with vibrant colors, showing athletic silhouettes, stylish and modern design, inspirational, Instagram-worthy, professional quality",
+        "Criptomonedas": "A sleek cryptocurrency illustration with modern design, digital currency symbols, blockchain visualization, futuristic, professional financial graphic, clean lines, dark blue and gold colors",
+        "Vitalidad al límite": "A serene wellness image showing natural elements, peaceful zen garden, holistic health symbols, organic colors, minimal design, high-quality photography style, Instagram aesthetic",
+        "Pensamientos de millonarios": "An elegant luxury minimalist image representing success and wealth mindset, gold accents, modern entrepreneur aesthetic, professional quality, inspirational, sleek design"
+    }
+    
+    try:
+        # Aquí usaríamos la API de generación de imágenes
+        # Como no podemos usar directamente la API de imagen con el código proporcionado,
+        # vamos a implementar una función que simula una URL de imagen
+        # En producción, esto debería reemplazarse por una llamada real a la API de generación de imágenes
+        
+        # Opciones de imágenes de stock por tema para simular la generación
+        stock_images = {
+            "Conexión fitness": [
+                "https://images.unsplash.com/photo-1517836357463-d25dfeac3438",
+                "https://images.unsplash.com/photo-1518611012118-696072aa579a",
+                "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b"
+            ],
+            "Criptomonedas": [
+                "https://images.unsplash.com/photo-1621504450181-5d356f61d307",
+                "https://images.unsplash.com/photo-1621761191319-c6fb62004040",
+                "https://images.unsplash.com/photo-1621501103258-3e135c8c1fda"
+            ],
+            "Vitalidad al límite": [
+                "https://images.unsplash.com/photo-1532187643603-ba119ca4109e",
+                "https://images.unsplash.com/photo-1545205597-3d9d02c29597",
+                "https://images.unsplash.com/photo-1600618528240-fb9fc964eca8"
+            ],
+            "Pensamientos de millonarios": [
+                "https://images.unsplash.com/photo-1626266063343-838d5a257e3a",
+                "https://images.unsplash.com/photo-1634757439914-e7ffd8866a56",
+                "https://images.unsplash.com/photo-1589666564459-93cdd3ab856a"
+            ]
+        }
+        
+        # Seleccionar una imagen aleatoria del tema
+        import random
+        return random.choice(stock_images[theme])
+        
+        # NOTA: En producción, aquí deberías usar una API real de generación de imágenes
+        # Por ejemplo, podrías usar esto (comentado por ahora):
+        """
+        response = client_ai.images.generate(
+            model="imagegeneration",
+            prompt=image_prompts[theme],
+            size="1024x1024",
+            n=1
+        )
+        return response.data[0].url
+        """
+        
+    except Exception as e:
+        logger.error(f"Error al generar imagen: {e}")
+        return None
+
+# Función para generar contenido con Google AI (mejorado para ser más corto y estético)
 async def generate_content(theme):
+    # Emojis temáticos para cada categoría
+    theme_emojis = {
+        "Conexión fitness": ["💪", "🏋️‍♀️", "🏃‍♂️", "🧘‍♀️", "🥗", "🔥", "🏆", "⚡", "🚴‍♂️", "💯"],
+        "Criptomonedas": ["💰", "📈", "🚀", "💹", "🔐", "💻", "🌐", "💎", "📊", "🤑"],
+        "Vitalidad al límite": ["🌱", "✨", "🧠", "💚", "🌿", "🌞", "🧘", "🍃", "💆‍♀️", "🌈"],
+        "Pensamientos de millonarios": ["💎", "💼", "🏆", "💡", "🔝", "👑", "💸", "🌟", "🎯", "💪"]
+    }
+    
     prompts = {
-        "Conexión fitness": "Crea una publicación motivadora sobre fitness, ejercicio o vida saludable. Incluye un consejo práctico y una frase motivadora. Formato: título en negrita, 2-3 párrafos de contenido, y una conclusión inspiradora. Usa emojis relevantes.",
-        "Criptomonedas": "Crea una publicación informativa sobre criptomonedas. Incluye una tendencia actual, un dato interesante y un consejo para inversores. No hagas predicciones específicas de precios. Formato: título en negrita, 2-3 párrafos informativos, y una conclusión. Usa emojis relevantes.",
-        "Vitalidad al límite": "Crea una publicación sobre salud holística, bienestar y vitalidad. Incluye un consejo sobre alimentación, descanso o técnicas de bienestar. Formato: título en negrita, 2-3 párrafos informativos, y una conclusión práctica. Usa emojis relevantes.",
-        "Pensamientos de millonarios": "Crea una publicación inspiradora con enseñanzas de emprendedores exitosos y mentalidad de abundancia. Incluye una cita de un emprendedor famoso y un principio de éxito. Formato: título en negrita, 2-3 párrafos motivadores, y una reflexión final. Usa emojis relevantes."
+        "Conexión fitness": f"""Crea una publicación corta y visualmente atractiva sobre fitness o vida saludable.
+        
+        Requisitos:
+        1. Máximo 3-4 oraciones en total (muy conciso)
+        2. Incluye un título llamativo en formato HTML <b>Título</b>
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Conexión fitness"])}
+        5. Una frase motivadora entre <blockquote></blockquote>
+        6. No excedas las 50-60 palabras en total
+        
+        Ejemplo de estructura:
+        <b>TÍTULO IMPACTANTE</b>
+        
+        Contenido breve pero poderoso 💪 con emojis estratégicos ✨
+        
+        <blockquote>Frase motivadora aquí</blockquote>
+        """,
+        
+        "Criptomonedas": f"""Crea una publicación corta y visualmente atractiva sobre criptomonedas.
+        
+        Requisitos:
+        1. Máximo 3-4 oraciones en total (muy conciso)
+        2. Incluye un título llamativo en formato HTML <b>Título</b>
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Criptomonedas"])}
+        5. Un consejo o dato interesante entre <blockquote></blockquote>
+        6. No excedas las 50-60 palabras en total
+        
+        Ejemplo de estructura:
+        <b>TÍTULO IMPACTANTE</b>
+        
+        Contenido breve pero informativo 📊 con emojis estratégicos 🚀
+        
+        <blockquote>Consejo interesante aquí</blockquote>
+        """,
+        
+        "Vitalidad al límite": f"""Crea una publicación corta y visualmente atractiva sobre bienestar y salud holística.
+        
+        Requisitos:
+        1. Máximo 3-4 oraciones en total (muy conciso)
+        2. Incluye un título llamativo en formato HTML <b>Título</b>
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Vitalidad al límite"])}
+        5. Un consejo de bienestar entre <blockquote></blockquote>
+        6. No excedas las 50-60 palabras en total
+        
+        Ejemplo de estructura:
+        <b>TÍTULO IMPACTANTE</b>
+        
+        Contenido breve pero inspirador 🌱 con emojis estratégicos ✨
+        
+        <blockquote>Consejo de bienestar aquí</blockquote>
+        """,
+        
+        "Pensamientos de millonarios": f"""Crea una publicación corta y visualmente atractiva sobre mentalidad de abundancia y éxito.
+        
+        Requisitos:
+        1. Máximo 3-4 oraciones en total (muy conciso)
+        2. Incluye un título llamativo en formato HTML <b>Título</b>
+        3. Usa HTML para dar formato: <b>negrita</b>, <i>cursiva</i>, <u>subrayado</u> o <blockquote>cita</blockquote>
+        4. Incluye al menos 5-6 de estos emojis donde sea apropiado: {"".join(theme_emojis["Pensamientos de millonarios"])}
+        5. Una cita inspiradora entre <blockquote></blockquote>
+        6. No excedas las 50-60 palabras en total
+        
+        Ejemplo de estructura:
+        <b>TÍTULO IMPACTANTE</b>
+        
+        Contenido breve pero poderoso 💎 con emojis estratégicos 🔝
+        
+        <blockquote>Cita inspiradora aquí</blockquote>
+        """
     }
     
     try:
         # Usando la API de Google Gemini a través de la interfaz compatible con OpenAI
         response = client_ai.chat.completions.create(
-            model="gemini-1.5-flash", # Utilizamos el modelo de Gemini
+            model="gemini-1.5-flash",
             messages=[
-                {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Creas publicaciones atractivas, informativas y motivadoras."},
+                {"role": "system", "content": "Eres un experto creador de contenido para redes sociales. Creas publicaciones atractivas, concisas y visualmente impactantes con formato HTML."},
                 {"role": "user", "content": prompts[theme]}
             ],
             temperature=0.7,
-            max_tokens=500
+            max_tokens=200
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -95,32 +235,46 @@ async def generate_content(theme):
         return f"❌ No se pudo generar contenido para {theme} debido a un error. Por favor, intenta más tarde."
 
 # Función para publicar en un canal
-async def post_to_channel(context, channel_name, content=None):
+async def post_to_channel(context, channel_name, content=None, image_url=None):
     channel_id = CHANNELS[channel_name]["id"]
     emoji = CHANNELS[channel_name]["emoji"]
     
     if content is None:
         content = await generate_content(channel_name)
     
+    if image_url is None:
+        image_url = await generate_image(channel_name)
+    
     # Añadir firma y emoji temático
     current_date = datetime.now().strftime("%d/%m/%Y")
-    signature = f"\n\n{emoji} *{channel_name}* | {current_date}"
+    signature = f"\n\n{emoji} <b>{channel_name}</b> | {current_date}"
     full_content = f"{content}\n{signature}"
     
     try:
-        # Enviar mensaje
-        message = await context.bot.send_message(
-            chat_id=channel_id,
-            text=full_content,
-            parse_mode='Markdown'
-        )
+        if image_url:
+            # Enviar mensaje con imagen
+            message = await context.bot.send_photo(
+                chat_id=channel_id,
+                photo=image_url,
+                caption=full_content,
+                parse_mode='HTML'
+            )
+            bot_state["stats"]["with_images"] += 1
+        else:
+            # Enviar mensaje solo texto
+            message = await context.bot.send_message(
+                chat_id=channel_id,
+                text=full_content,
+                parse_mode='HTML'
+            )
         
         # Actualizar estadísticas
         bot_state["stats"]["total_posts"] += 1
         bot_state["stats"]["posts_per_channel"][channel_name] += 1
         bot_state["last_posts"][channel_name] = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "message_id": message.message_id
+            "message_id": message.message_id,
+            "has_image": image_url is not None
         }
         save_state()
         
@@ -133,19 +287,19 @@ async def post_to_channel(context, channel_name, content=None):
 async def post_to_all_channels(context):
     results = {}
     for channel in CHANNELS:
-        success, msg_id = await post_to_channel(context, channel)
-        results[channel] = "✅ Publicado" if success else f"❌ Error: {msg_id}"
+        success, result = await post_to_channel(context, channel)
+        results[channel] = "✅ Publicado" if success else f"❌ Error: {result}"
     
     # Notificar al administrador
-    admin_message = "*Resumen de publicaciones automáticas:*\n\n"
+    admin_message = "<b>Resumen de publicaciones automáticas:</b>\n\n"
     for channel, result in results.items():
-        admin_message += f"*{channel}*: {result}\n"
+        admin_message += f"<b>{channel}</b>: {result}\n"
     
     try:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=admin_message,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     except Exception as e:
         logger.error(f"Error al enviar resumen al administrador: {e}")
@@ -153,7 +307,7 @@ async def post_to_all_channels(context):
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_message = (
-        "👋 *¡Bienvenido al Bot de Publicaciones Automáticas!*\n\n"
+        "<b>👋 ¡Bienvenido al Bot de Publicaciones Automáticas!</b>\n\n"
         "Este bot publica contenido automáticamente en varios canales temáticos.\n\n"
         "Comandos disponibles:\n"
         "/menu - Mostrar menú principal\n"
@@ -172,7 +326,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         welcome_message,
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 # Comando /menu
@@ -200,9 +354,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🤖 *Menú Principal*\n\nSelecciona una opción:",
+        "<b>🤖 Menú Principal</b>\n\nSelecciona una opción:",
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 # Función para manejar callbacks
@@ -235,9 +389,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "🤖 *Menú Principal*\n\nSelecciona una opción:",
+            "<b>🤖 Menú Principal</b>\n\nSelecciona una opción:",
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data == "publish_menu":
@@ -253,9 +407,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "📝 *Publicar Contenido*\n\nSelecciona un canal para publicar:",
+            "<b>📝 Publicar Contenido</b>\n\nSelecciona un canal para publicar:",
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data.startswith("publish_"):
@@ -270,9 +424,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "✅ *Publicación Completada*\n\nSe ha publicado contenido en todos los canales.",
+                "<b>✅ Publicación Completada</b>\n\nSe ha publicado contenido en todos los canales.",
                 reply_markup=reply_markup,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
         else:
             await query.edit_message_text(f"🔄 Generando contenido para {channel_name}...")
@@ -284,15 +438,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if success:
                 await query.edit_message_text(
-                    f"✅ *Publicación Exitosa*\n\nSe ha publicado contenido en el canal {channel_name}.",
+                    f"<b>✅ Publicación Exitosa</b>\n\nSe ha publicado contenido en el canal {channel_name}.",
                     reply_markup=reply_markup,
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
             else:
                 await query.edit_message_text(
-                    f"❌ *Error al Publicar*\n\nNo se pudo publicar en {channel_name}.\nError: {result}",
+                    f"<b>❌ Error al Publicar</b>\n\nNo se pudo publicar en {channel_name}.\nError: {result}",
                     reply_markup=reply_markup,
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
     
     elif callback_data == "settings_menu":
@@ -309,9 +463,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "⚙️ *Configuración*\n\nAjusta los parámetros del bot:",
+            "<b>⚙️ Configuración</b>\n\nAjusta los parámetros del bot:",
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data == "toggle_auto_post":
@@ -337,9 +491,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "⏰ *Configurar Hora de Publicación*\n\nSelecciona la hora para las publicaciones automáticas:",
+            "<b>⏰ Configurar Hora de Publicación</b>\n\nSelecciona la hora para las publicaciones automáticas:",
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data.startswith("time_"):
@@ -350,7 +504,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"✅ Hora de publicación establecida a las {selected_time}.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="settings_menu")]]),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data == "set_frequency":
@@ -364,9 +518,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "📅 *Configurar Frecuencia*\n\nSelecciona con qué frecuencia se publicará el contenido:",
+            "<b>📅 Configurar Frecuencia</b>\n\nSelecciona con qué frecuencia se publicará el contenido:",
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data.startswith("freq_"):
@@ -377,27 +531,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"✅ Frecuencia establecida a {frequency}.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="settings_menu")]]),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data == "stats":
         total_posts = bot_state["stats"]["total_posts"]
         posts_per_channel = bot_state["stats"]["posts_per_channel"]
+        with_images = bot_state.get("stats", {}).get("with_images", 0)
         
-        stats_text = "*📊 Estadísticas de Publicaciones*\n\n"
-        stats_text += f"*Total de publicaciones:* {total_posts}\n\n"
-        stats_text += "*Publicaciones por canal:*\n"
+        stats_text = "<b>📊 Estadísticas de Publicaciones</b>\n\n"
+        stats_text += f"<b>Total de publicaciones:</b> {total_posts}\n"
+        stats_text += f"<b>Con imágenes:</b> {with_images}\n\n"
+        stats_text += "<b>Publicaciones por canal:</b>\n"
         
         for channel, count in posts_per_channel.items():
             emoji = CHANNELS[channel]["emoji"]
-            stats_text += f"{emoji} *{channel}:* {count}\n"
+            stats_text += f"{emoji} <b>{channel}:</b> {count}\n"
         
         # Añadir última publicación si existe
         if bot_state["last_posts"]:
-            stats_text += "\n*Últimas publicaciones:*\n"
+            stats_text += "\n<b>Últimas publicaciones:</b>\n"
             for channel, data in bot_state["last_posts"].items():
                 if "timestamp" in data:
-                    stats_text += f"{CHANNELS[channel]['emoji']} *{channel}:* {data['timestamp']}\n"
+                    img_icon = "🖼️" if data.get("has_image", False) else ""
+                    stats_text += f"{CHANNELS[channel]['emoji']} <b>{channel}:</b> {data['timestamp']} {img_icon}\n"
         
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -405,7 +562,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             stats_text,
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data == "status":
@@ -413,14 +570,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         post_time = bot_state["post_time"]
         frequency = bot_state["post_frequency"]
         
-        status_text = "*🔄 Estado Actual del Bot*\n\n"
-        status_text += f"*Auto-publicación:* {auto_post}\n"
-        status_text += f"*Hora de publicación:* {post_time}\n"
-        status_text += f"*Frecuencia:* {frequency}\n\n"
+        status_text = "<b>🔄 Estado Actual del Bot</b>\n\n"
+        status_text += f"<b>Auto-publicación:</b> {auto_post}\n"
+        status_text += f"<b>Hora de publicación:</b> {post_time}\n"
+        status_text += f"<b>Frecuencia:</b> {frequency}\n\n"
         
-        status_text += "*Canales configurados:*\n"
+        status_text += "<b>Canales configurados:</b>\n"
         for channel, data in CHANNELS.items():
-            status_text += f"{data['emoji']} *{channel}*\n"
+            status_text += f"{data['emoji']} <b>{channel}</b>\n"
         
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -428,13 +585,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             status_text,
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif callback_data == "help":
         help_text = (
-            "*❓ Ayuda del Bot*\n\n"
-            "*Comandos disponibles:*\n"
+            "<b>❓ Ayuda del Bot</b>\n\n"
+            "<b>Comandos disponibles:</b>\n"
             "/start - Iniciar el bot\n"
             "/menu - Mostrar menú principal\n"
             "/post - Publicar contenido manualmente\n"
@@ -442,13 +599,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/status - Ver estado actual\n"
             "/help - Mostrar esta ayuda\n\n"
             
-            "*Funcionalidades:*\n"
+            "<b>Funcionalidades:</b>\n"
             "• Publicación automática en canales temáticos\n"
             "• Generación de contenido con IA\n"
+            "• Imágenes atractivas para cada publicación\n"
             "• Programación de publicaciones\n"
             "• Estadísticas de publicaciones\n\n"
             
-            "*Temáticas disponibles:*\n"
+            "<b>Temáticas disponibles:</b>\n"
             "💪 Conexión fitness\n"
             "💰 Criptomonedas\n"
             "🌱 Vitalidad al límite\n"
@@ -457,13 +615,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Para más información o soporte, contacta al administrador."
         )
         
-        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
+         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
             help_text,
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
 
 # Comando /post
@@ -487,9 +645,9 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "📝 *Publicar Contenido*\n\nSelecciona un canal para publicar:",
+        "<b>📝 Publicar Contenido</b>\n\nSelecciona un canal para publicar:",
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 # Comando /settings
@@ -514,9 +672,9 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "⚙️ *Configuración*\n\nAjusta los parámetros del bot:",
+        "<b>⚙️ Configuración</b>\n\nAjusta los parámetros del bot:",
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 # Comando /status
@@ -532,14 +690,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     post_time = bot_state["post_time"]
     frequency = bot_state["post_frequency"]
     
-    status_text = "*🔄 Estado Actual del Bot*\n\n"
-    status_text += f"*Auto-publicación:* {auto_post}\n"
-    status_text += f"*Hora de publicación:* {post_time}\n"
-    status_text += f"*Frecuencia:* {frequency}\n\n"
+    status_text = "<b>🔄 Estado Actual del Bot</b>\n\n"
+    status_text += f"<b>Auto-publicación:</b> {auto_post}\n"
+    status_text += f"<b>Hora de publicación:</b> {post_time}\n"
+    status_text += f"<b>Frecuencia:</b> {frequency}\n\n"
     
-    status_text += "*Canales configurados:*\n"
+    status_text += "<b>Canales configurados:</b>\n"
     for channel, data in CHANNELS.items():
-        status_text += f"{data['emoji']} *{channel}*\n"
+        status_text += f"{data['emoji']} <b>{channel}</b>\n"
     
     keyboard = [[InlineKeyboardButton("🔙 Volver al Menú", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -547,14 +705,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         status_text,
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 # Comando /help
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "*❓ Ayuda del Bot*\n\n"
-        "*Comandos disponibles:*\n"
+        "<b>❓ Ayuda del Bot</b>\n\n"
+        "<b>Comandos disponibles:</b>\n"
         "/start - Iniciar el bot\n"
         "/menu - Mostrar menú principal\n"
         "/post - Publicar contenido manualmente\n"
@@ -562,13 +720,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/status - Ver estado actual\n"
         "/help - Mostrar esta ayuda\n\n"
         
-        "*Funcionalidades:*\n"
+        "<b>Funcionalidades:</b>\n"
         "• Publicación automática en canales temáticos\n"
         "• Generación de contenido con IA\n"
+        "• Imágenes atractivas para cada publicación\n"
         "• Programación de publicaciones\n"
         "• Estadísticas de publicaciones\n\n"
         
-        "*Temáticas disponibles:*\n"
+        "<b>Temáticas disponibles:</b>\n"
         "💪 Conexión fitness\n"
         "💰 Criptomonedas\n"
         "🌱 Vitalidad al límite\n"
@@ -583,7 +742,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         help_text,
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 # Tarea programada para publicar contenido
@@ -608,6 +767,70 @@ async def keep_alive(context):
         
         # Esperar 60 segundos antes de la siguiente verificación
         await asyncio.sleep(60)
+
+# Función para hacer una solicitud de imagen real a Google Gemini
+async def generate_real_image(theme, client_ai, api_key):
+    # Prompts específicos para cada tema
+    image_prompts = {
+        "Conexión fitness": "A beautiful minimalist fitness motivation image with vibrant colors, showing athletic silhouettes, inspirational, Instagram-worthy, professional quality",
+        "Criptomonedas": "A sleek cryptocurrency illustration with modern design, digital currency symbols, blockchain visualization, futuristic, professional financial graphic, clean lines",
+        "Vitalidad al límite": "A serene wellness image showing natural elements, peaceful zen garden, holistic health symbols, organic colors, minimal design, high-quality photography style",
+        "Pensamientos de millonarios": "An elegant luxury minimalist image representing success and wealth mindset, gold accents, modern entrepreneur aesthetic, professional quality, inspirational design"
+    }
+    
+    try:
+        # Para una implementación real usando Gemini Pro Vision, necesitaríamos una API específica que soporte generación de imágenes
+        # Esta es una implementación de ejemplo que debería adaptarse según la API disponible
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateImage"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        data = {
+            "prompt": {
+                "text": image_prompts[theme]
+            },
+            "size": {
+                "width": 1024,
+                "height": 1024
+            }
+        }
+        
+        # Nota: Esta parte es teórica, la implementación real dependería de la API específica
+        # response = requests.post(url, json=data, headers=headers)
+        # if response.status_code == 200:
+        #     return response.json().get("image", {}).get("url")
+        
+        # Por ahora volvemos al método de imágenes de stock
+        stock_images = {
+            "Conexión fitness": [
+                "https://images.unsplash.com/photo-1517836357463-d25dfeac3438",
+                "https://images.unsplash.com/photo-1518611012118-696072aa579a",
+                "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b"
+            ],
+            "Criptomonedas": [
+                "https://images.unsplash.com/photo-1621504450181-5d356f61d307",
+                "https://images.unsplash.com/photo-1621761191319-c6fb62004040",
+                "https://images.unsplash.com/photo-1621501103258-3e135c8c1fda"
+            ],
+            "Vitalidad al límite": [
+                "https://images.unsplash.com/photo-1532187643603-ba119ca4109e",
+                "https://images.unsplash.com/photo-1545205597-3d9d02c29597",
+                "https://images.unsplash.com/photo-1600618528240-fb9fc964eca8"
+            ],
+            "Pensamientos de millonarios": [
+                "https://images.unsplash.com/photo-1626266063343-838d5a257e3a",
+                "https://images.unsplash.com/photo-1634757439914-e7ffd8866a56",
+                "https://images.unsplash.com/photo-1589666564459-93cdd3ab856a"
+            ]
+        }
+        
+        import random
+        return random.choice(stock_images[theme])
+        
+    except Exception as e:
+        logger.error(f"Error al generar imagen real: {e}")
+        return None
 
 # Función principal
 async def main():
