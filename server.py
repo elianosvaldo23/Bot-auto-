@@ -21,7 +21,7 @@ def run():
     except Exception as e:
         logger.error(f"Error en el servidor web: {e}")
 
-def start_server():
+def keep_alive():  # Cambiamos el nombre de vuelta a keep_alive
     try:
         server_thread = Thread(target=run)
         server_thread.daemon = True
