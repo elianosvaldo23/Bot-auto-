@@ -9,6 +9,65 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.error import BadRequest
 from openai import OpenAI
 import json
+import signal
+import sys
+from server import keep_alive
+import asyncio
+from datetime import datetime, timedelta
+
+# Función para manejar señales de terminación
+def handle_exit(signum, frame):
+    """Maneja señales de terminación"""
+    print(f"Recibida señal de terminación {signum}. Guardando estado y saliendo...")
+    save_state()
+    sys.exit(0)
+
+# Registrar manejadores de señales
+signal.signal(signal.SIGINT, handle_exit)
+signal.signal(signal.SIGTERM, handle_exit)
+
+# Modificar la función keep_alive existente
+async def keep_alive(context):
+    while True:
+        try:
+            logger.info("Bot activo - Keep alive ping")
+            current_hour = datetime.now().hour
+            current_minute = datetime.now().minute
+            
+            # Verificar si es hora de publicación
+            post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
+            
+            if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
+                logger.info("Ejecutando publicación programada")
+                await post_to_all_channels(context)
+            
+            # Guardar estado periódicamente
+            save_state()
+            
+            # Limpiar historial antiguo (más de 30 días)
+            clean_old_history()
+            
+            # Esperar 60 segundos antes de la siguiente verificación
+            await asyncio.sleep(60)
+            
+        except Exception as e:
+            logger.error(f"Error en keep_alive: {e}")
+            await asyncio.sleep(60)  # Esperar incluso si hay error
+
+# Función para limpiar historial antiguo
+def clean_old_history():
+    """Limpia el historial de contenido antiguo (más de 30 días)"""
+    try:
+        current_time = datetime.now()
+        for channel in bot_state["content_history"]:
+            # Filtrar solo el contenido de los últimos 30 días
+            bot_state["content_history"][channel] = [
+                content for content in bot_state["content_history"][channel]
+                if datetime.strptime(content["timestamp"], "%Y-%m-%d %H:%M:%S") > current_time - timedelta(days=30)
+            ]
+        logger.info("Limpieza de historial antiguo completada")
+    except Exception as e:
+        logger.error(f"Error limpiando historial antiguo: {e}")
 
 # Configuración de logging
 logging.basicConfig(
@@ -25,7 +84,7 @@ client_ai = OpenAI(
 )
 
 # Configuración del bot
-BOT_TOKEN = "7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw"
+BOT_TOKEN = "7551775190:AAHeQWSdP-wN8-w4bTnJukC7fwVI_Jd_EHA"
 ADMIN_ID = 1742433244  # ID del administrador
 
 # Definición de canales y sus temáticas
@@ -890,40 +949,53 @@ async def main():
     # Cargar estado previo
     load_state()
     
-    # Crear la aplicación
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Registrar manejadores de comandos
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", menu))
-    application.add_handler(CommandHandler("post", post_command))
-    application.add_handler(CommandHandler("settings", settings_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("help", help_command))
-    
-    # Registrar manejador de botones
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Iniciar el bot
-    await application.initialize()
-    await application.start()
-    
-    # Iniciar tarea de keep alive
-    asyncio.create_task(keep_alive(application))
-    
-    # Iniciar el polling
-    await application.updater.start_polling()
-    
-    # Mantener el bot ejecutándose
     try:
-        await asyncio.Future()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot detenido manualmente")
+        # Iniciar servidor web para keep-alive
+        keep_alive()
+        
+        # Crear la aplicación
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Registrar manejadores de comandos
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("menu", menu))
+        application.add_handler(CommandHandler("post", post_command))
+        application.add_handler(CommandHandler("settings", settings_command))
+        application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(CommandHandler("help", help_command))
+        
+        # Registrar manejador de botones
+        application.add_handler(CallbackQueryHandler(button_callback))
+        
+        # Iniciar el bot
+        await application.initialize()
+        await application.start()
+        
+        # Iniciar tarea de keep alive
+        asyncio.create_task(keep_alive(application))
+        
+        # Iniciar el polling
+        await application.updater.start_polling()
+        
+        # Mantener el bot ejecutándose
+        try:
+            await asyncio.Future()
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Bot detenido manualmente")
+        
+    except Exception as e:
+        logger.error(f"Error crítico en el bot: {e}")
+        
     finally:
-        # Guardar el estado antes de salir
+        # Guardar estado antes de salir
         save_state()
+        # Detener el bot de manera segura
         await application.updater.stop()
         await application.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.error(f"Error al iniciar el bot: {e}")
+        sys.exit(1)
