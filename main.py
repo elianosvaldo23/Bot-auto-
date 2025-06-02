@@ -4,13 +4,18 @@ import asyncio
 import time
 import random
 from datetime import datetime
-import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import BadRequest
 from openai import OpenAI
 import json
-import aiohttp
+
+# Configuración de logging - DEBE ESTAR AL PRINCIPIO
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Configuración de Google AI Studio
 GOOGLE_API_KEY = "AIzaSyBqNZnq8eHr5LMJ1yGZQU1rmw-Nmafy4TU"
@@ -52,29 +57,41 @@ def run_web_server():
 # Función para guardar el estado del bot
 def save_state():
     try:
+        # Asegurarse de que el directorio existe
+        os.makedirs(os.path.dirname('bot_state.json'), exist_ok=True)
+        
         with open('bot_state.json', 'w') as f:
             json.dump(bot_state, f)
         logger.info("Estado del bot guardado correctamente")
     except Exception as e:
         logger.error(f"Error al guardar estado: {e}")
 
-# Función para cargar el estado del bot
 def load_state():
     global bot_state
     try:
+        if not os.path.exists('bot_state.json'):
+            logger.info("Archivo de estado no encontrado, creando uno nuevo")
+            # Guardar el estado predeterminado
+            save_state()
+            return
+
         with open('bot_state.json', 'r') as f:
-            bot_state = json.load(f)
-        logger.info("Estado del bot cargado correctamente")
+            loaded_state = json.load(f)
+            
+        # Actualizar el estado con los valores cargados
+        bot_state.update(loaded_state)
         
         # Asegurar que existen las claves necesarias
         if "content_history" not in bot_state:
             bot_state["content_history"] = {channel: [] for channel in CHANNELS}
             
-    except FileNotFoundError:
-        logger.info("Archivo de estado no encontrado, usando valores predeterminados")
-        save_state()
+        logger.info("Estado del bot cargado correctamente")
+            
     except Exception as e:
         logger.error(f"Error al cargar estado: {e}")
+        # Si hay algún error, mantener el estado predeterminado
+        logger.info("Usando valores predeterminados")
+        save_state()
 
 # Función para limpiar y validar HTML
 def clean_html(content):
@@ -935,7 +952,7 @@ async def main():
         await application.initialize()
         await application.start()
         
-        # Iniciar tarea de keep alive como una tarea en segundo plano
+        # Iniciar tarea de keep alive
         keep_alive_task = asyncio.create_task(keep_alive(application))
         
         # Iniciar el polling
@@ -948,18 +965,17 @@ async def main():
             logger.info("Bot detenido manualmente")
         finally:
             # Limpiar recursos
-            keep_alive_task.cancel()  # Cancelar la tarea keep_alive
+            keep_alive_task.cancel()
             try:
-                await keep_alive_task  # Esperar a que la tarea termine
+                await keep_alive_task
             except asyncio.CancelledError:
-                pass  # Esto es esperado
+                pass
             
             # Guardar estado y detener el bot
             save_state()
             await application.updater.stop()
             await application.stop()
-            await application.shutdown()
-    
+            
     except Exception as e:
         logger.error(f"Error en main: {e}")
         raise
@@ -968,6 +984,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Bot detenido por el usuario")
+        print("Bot detenido por el usuario")
     except Exception as e:
-        logger.error(f"Error fatal: {e}")
+        print(f"Error fatal: {e}")
