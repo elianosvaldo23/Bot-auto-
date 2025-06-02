@@ -34,7 +34,7 @@ client_ai = OpenAI(
 )
 
 # Configuración del bot
-BOT_TOKEN = "7551775190:AAHeQWSdP-wN8-w4bTnJukC7fwVI_Jd_EHA"
+BOT_TOKEN = "7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw"
 ADMIN_ID = 1742433244  # ID del administrador
 
 # Definición de canales y sus temáticas
@@ -888,74 +888,100 @@ async def keep_alive(context):
     while True:
         try:
             logger.info("Bot activo - Keep alive ping")
-            
-            # Hacer ping a tu aplicación en Render
-            try:
-                # Reemplaza con tu URL de Render
-                response = requests.get("https://bot-auto-qrpo.onrender.com")
-                logger.info(f"Ping status: {response.status_code}")
-            except Exception as e:
-                logger.error(f"Error en ping: {e}")
-            
-            # Verificar si es hora de publicación
             current_hour = datetime.now().hour
             current_minute = datetime.now().minute
+            
+            # Verificar si es hora de publicación
             post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
             
             if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
-                logger.info("Ejecutando publicación programada")
-                await post_to_all_channels(context)
+                try:
+                    logger.info("Ejecutando publicación programada")
+                    await post_to_all_channels(context)
+                except Exception as e:
+                    logger.error(f"Error en publicación programada: {e}")
             
-            # Esperar 10 minutos antes del siguiente ping
+            # Hacer un ping a la URL de Render cada 10 minutos
+            try:
+                async with aiohttp.ClientSession() as session:
+                    # Reemplaza con tu URL de Render
+                    app_url = f"https://{os.getenv('RENDER_EXTERNAL_URL', 'tu-app.onrender.com')}"
+                    async with session.get(app_url) as response:
+                        if response.status == 200:
+                            logger.info("Keep-alive ping exitoso")
+                        else:
+                            logger.warning(f"Keep-alive ping falló con status {response.status}")
+            except Exception as e:
+                logger.error(f"Error en ping: {e}")
+            
+            # Esperar 10 minutos
             await asyncio.sleep(600)  # 600 segundos = 10 minutos
             
+        except asyncio.CancelledError:
+            # Manejar la cancelación de manera limpia
+            logger.info("Keep-alive task cancelada")
+            break
         except Exception as e:
             logger.error(f"Error en keep_alive: {e}")
             await asyncio.sleep(60)  # Esperar 1 minuto en caso de error
 
 # Función principal
 async def main():
-    # Cargar estado previo
-    load_state()
-    
-    # Crear la aplicación
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Registrar manejadores de comandos
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", menu))
-    application.add_handler(CommandHandler("post", post_command))
-    application.add_handler(CommandHandler("settings", settings_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("help", help_command))
-    
-    # Registrar manejador de botones
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Iniciar el bot
-    await application.initialize()
-    await application.start()
-    
-    # Iniciar el servidor web en un hilo separado
-    web_thread = threading.Thread(target=run_web_server)
-    web_thread.start()
-    
-    # Iniciar tarea de keep alive
-    asyncio.create_task(keep_alive(application))
-    
-    # Iniciar el polling
-    await application.updater.start_polling()
-    
-    # Mantener el bot ejecutándose
     try:
-        await asyncio.Future()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot detenido manualmente")
-    finally:
-        # Guardar el estado antes de salir
-        save_state()
-        await application.updater.stop()
-        await application.stop()
+        # Cargar estado previo
+        load_state()
+        
+        # Crear la aplicación
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Registrar manejadores de comandos
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("menu", menu))
+        application.add_handler(CommandHandler("post", post_command))
+        application.add_handler(CommandHandler("settings", settings_command))
+        application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(CommandHandler("help", help_command))
+        
+        # Registrar manejador de botones
+        application.add_handler(CallbackQueryHandler(button_callback))
+        
+        # Iniciar el bot
+        await application.initialize()
+        await application.start()
+        
+        # Iniciar tarea de keep alive como una tarea en segundo plano
+        keep_alive_task = asyncio.create_task(keep_alive(application))
+        
+        # Iniciar el polling
+        await application.updater.start_polling()
+        
+        # Mantener el bot ejecutándose
+        try:
+            await asyncio.Future()  # run forever
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Bot detenido manualmente")
+        finally:
+            # Limpiar recursos
+            keep_alive_task.cancel()  # Cancelar la tarea keep_alive
+            try:
+                await keep_alive_task  # Esperar a que la tarea termine
+            except asyncio.CancelledError:
+                pass  # Esto es esperado
+            
+            # Guardar estado y detener el bot
+            save_state()
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+    
+    except Exception as e:
+        logger.error(f"Error en main: {e}")
+        raise
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot detenido por el usuario")
+    except Exception as e:
+        logger.error(f"Error fatal: {e}")
