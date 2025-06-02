@@ -9,9 +9,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.error import BadRequest
 from openai import OpenAI
 import json
-from flask import Flask
-import threading
-from waitress import serve
+import aiohttp
 
 app = Flask(__name__)
 
@@ -883,26 +881,30 @@ async def scheduled_post(context):
 
 # Función para mantener el bot activo (necesario en Render)
 async def keep_alive(context):
-    while True:
-        try:
-            logger.info("Bot activo - Keep alive ping")
-            current_hour = datetime.now().hour
-            current_minute = datetime.now().minute
-            
-            # Verificar si es hora de publicación
-            post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
-            
-            if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
-                logger.info("Ejecutando publicación programada")
-                await post_to_all_channels(context)
-            
-            # Esperar 10 minutos antes de la siguiente verificación
-            # Render requiere actividad cada 15 minutos, así que usamos 10 para estar seguros
-            await asyncio.sleep(600)  # 600 segundos = 10 minutos
-        except Exception as e:
-            logger.error(f"Error en keep_alive: {e}")
-            # En caso de error, esperar 1 minuto y reintentar
-            await asyncio.sleep(60)
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                # Hacer un ping a tu aplicación en Render
+                app_url = "https://tu-app.onrender.com"  # Reemplaza con tu URL de Render
+                async with session.get(app_url) as response:
+                    logger.info(f"Keep-alive ping enviado. Status: {response.status}")
+                
+                # Verificar si es hora de publicación
+                current_hour = datetime.now().hour
+                current_minute = datetime.now().minute
+                post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
+                
+                if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
+                    logger.info("Ejecutando publicación programada")
+                    await post_to_all_channels(context)
+                
+                # Esperar 10 minutos antes del siguiente ping
+                await asyncio.sleep(600)  # 600 segundos = 10 minutos
+                
+            except Exception as e:
+                logger.error(f"Error en keep_alive: {e}")
+                # En caso de error, esperar 1 minuto y reintentar
+                await asyncio.sleep(60)
 
 # Función principal
 async def main():
