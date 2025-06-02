@@ -21,11 +21,11 @@ def run():
     except Exception as e:
         logger.error(f"Error en el servidor web: {e}")
 
-def keep_alive():
+def start_server():
     try:
-        t = Thread(target=run)
-        t.daemon = True  # El hilo se cerrará cuando el programa principal termine
-        t.start()
+        server_thread = Thread(target=run)
+        server_thread.daemon = True
+        server_thread.start()
         logger.info("Servidor web iniciado correctamente")
     except Exception as e:
         logger.error(f"Error iniciando servidor web: {e}")
