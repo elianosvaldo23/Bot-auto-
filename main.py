@@ -9,6 +9,15 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.error import BadRequest
 from openai import OpenAI
 import json
+from flask import Flask
+import threading
+from waitress import serve
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
 
 # Configuración de logging
 logging.basicConfig(
@@ -49,6 +58,10 @@ bot_state = {
     },
     "content_history": {channel: [] for channel in CHANNELS}  # Historial de contenido por canal
 }
+
+def run_web_server():
+    # Usar waitress como servidor WSGI
+    serve(app, host='0.0.0.0', port=8080)
 
 # Función para guardar el estado del bot
 def save_state():
@@ -871,19 +884,25 @@ async def scheduled_post(context):
 # Función para mantener el bot activo (necesario en Render)
 async def keep_alive(context):
     while True:
-        logger.info("Bot activo - Keep alive ping")
-        current_hour = datetime.now().hour
-        current_minute = datetime.now().minute
-        
-        # Verificar si es hora de publicación
-        post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
-        
-        if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
-            logger.info("Ejecutando publicación programada")
-            await post_to_all_channels(context)
-        
-        # Esperar 60 segundos antes de la siguiente verificación
-        await asyncio.sleep(60)
+        try:
+            logger.info("Bot activo - Keep alive ping")
+            current_hour = datetime.now().hour
+            current_minute = datetime.now().minute
+            
+            # Verificar si es hora de publicación
+            post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
+            
+            if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
+                logger.info("Ejecutando publicación programada")
+                await post_to_all_channels(context)
+            
+            # Esperar 10 minutos antes de la siguiente verificación
+            # Render requiere actividad cada 15 minutos, así que usamos 10 para estar seguros
+            await asyncio.sleep(600)  # 600 segundos = 10 minutos
+        except Exception as e:
+            logger.error(f"Error en keep_alive: {e}")
+            # En caso de error, esperar 1 minuto y reintentar
+            await asyncio.sleep(60)
 
 # Función principal
 async def main():
@@ -907,6 +926,10 @@ async def main():
     # Iniciar el bot
     await application.initialize()
     await application.start()
+    
+    # Iniciar el servidor web en un hilo separado
+    web_thread = threading.Thread(target=run_web_server)
+    web_thread.start()
     
     # Iniciar tarea de keep alive
     asyncio.create_task(keep_alive(application))
