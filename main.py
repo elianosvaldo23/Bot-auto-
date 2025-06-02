@@ -899,10 +899,7 @@ async def scheduled_post(context):
         logger.info("Ejecutando publicación programada")
         await post_to_all_channels(context)
 
-# ... (resto del código se mantiene igual hasta la función keep_alive)
-
-# Modificar la función keep_alive
-async def keep_alive(app: Application):
+async def bot_keep_alive(app: Application):
     """Mantiene el bot activo y maneja las publicaciones programadas"""
     while True:
         try:
@@ -924,17 +921,15 @@ async def keep_alive(app: Application):
             await asyncio.sleep(60)
         except Exception as e:
             logger.error(f"Error en keep_alive: {e}")
-            await asyncio.sleep(60)  # Esperar incluso si hay error
+            await asyncio.sleep(60)
 
-# Modificar la función main
 async def main():
     # Cargar estado previo
     load_state()
     
     try:
         # Iniciar servidor web
-        from server import start_server
-        start_server()
+        keep_alive()  # Llamamos a la función del servidor web
         
         # Crear la aplicación
         application = Application.builder().token(BOT_TOKEN).build()
@@ -955,14 +950,14 @@ async def main():
         await application.start()
         
         # Iniciar tarea de keep alive con la aplicación como parámetro
-        asyncio.create_task(keep_alive(application))
+        asyncio.create_task(bot_keep_alive(application))
         
         # Iniciar el polling
         await application.updater.start_polling()
         
         # Mantener el bot ejecutándose
         try:
-            await asyncio.Future()  # Esperar indefinidamente
+            await asyncio.Future()
         except (KeyboardInterrupt, SystemExit):
             logger.info("Bot detenido manualmente")
         finally:
