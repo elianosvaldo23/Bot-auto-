@@ -12,17 +12,6 @@ from openai import OpenAI
 import json
 import aiohttp
 
-@app.route('/')
-def home():
-    return "Bot is alive!"
-
-# Configuración de logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
 # Configuración de Google AI Studio
 GOOGLE_API_KEY = "AIzaSyBqNZnq8eHr5LMJ1yGZQU1rmw-Nmafy4TU"
 client_ai = OpenAI(
