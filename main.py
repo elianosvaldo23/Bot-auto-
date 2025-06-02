@@ -26,34 +26,6 @@ def handle_exit(signum, frame):
 signal.signal(signal.SIGINT, handle_exit)
 signal.signal(signal.SIGTERM, handle_exit)
 
-# Modificar la función keep_alive existente
-async def keep_alive(context):
-    while True:
-        try:
-            logger.info("Bot activo - Keep alive ping")
-            current_hour = datetime.now().hour
-            current_minute = datetime.now().minute
-            
-            # Verificar si es hora de publicación
-            post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
-            
-            if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
-                logger.info("Ejecutando publicación programada")
-                await post_to_all_channels(context)
-            
-            # Guardar estado periódicamente
-            save_state()
-            
-            # Limpiar historial antiguo (más de 30 días)
-            clean_old_history()
-            
-            # Esperar 60 segundos antes de la siguiente verificación
-            await asyncio.sleep(60)
-            
-        except Exception as e:
-            logger.error(f"Error en keep_alive: {e}")
-            await asyncio.sleep(60)  # Esperar incluso si hay error
-
 # Función para limpiar historial antiguo
 def clean_old_history():
     """Limpia el historial de contenido antiguo (más de 30 días)"""
@@ -927,31 +899,42 @@ async def scheduled_post(context):
         logger.info("Ejecutando publicación programada")
         await post_to_all_channels(context)
 
-# Función para mantener el bot activo (necesario en Render)
-async def keep_alive(context):
-    while True:
-        logger.info("Bot activo - Keep alive ping")
-        current_hour = datetime.now().hour
-        current_minute = datetime.now().minute
-        
-        # Verificar si es hora de publicación
-        post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
-        
-        if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
-            logger.info("Ejecutando publicación programada")
-            await post_to_all_channels(context)
-        
-        # Esperar 60 segundos antes de la siguiente verificación
-        await asyncio.sleep(60)
+# ... (resto del código se mantiene igual hasta la función keep_alive)
 
-# Función principal
+# Modificar la función keep_alive
+async def keep_alive(app: Application):
+    """Mantiene el bot activo y maneja las publicaciones programadas"""
+    while True:
+        try:
+            logger.info("Bot activo - Keep alive ping")
+            current_hour = datetime.now().hour
+            current_minute = datetime.now().minute
+            
+            # Verificar si es hora de publicación
+            post_hour, post_minute = map(int, bot_state["post_time"].split(":"))
+            
+            if current_hour == post_hour and current_minute == post_minute and bot_state["auto_post"]:
+                logger.info("Ejecutando publicación programada")
+                await post_to_all_channels(app)
+            
+            # Guardar estado periódicamente
+            save_state()
+            
+            # Esperar 60 segundos antes de la siguiente verificación
+            await asyncio.sleep(60)
+        except Exception as e:
+            logger.error(f"Error en keep_alive: {e}")
+            await asyncio.sleep(60)  # Esperar incluso si hay error
+
+# Modificar la función main
 async def main():
     # Cargar estado previo
     load_state()
     
     try:
-        # Iniciar servidor web para keep-alive
-        keep_alive()
+        # Iniciar servidor web
+        from server import start_server
+        start_server()
         
         # Crear la aplicación
         application = Application.builder().token(BOT_TOKEN).build()
@@ -971,7 +954,7 @@ async def main():
         await application.initialize()
         await application.start()
         
-        # Iniciar tarea de keep alive
+        # Iniciar tarea de keep alive con la aplicación como parámetro
         asyncio.create_task(keep_alive(application))
         
         # Iniciar el polling
@@ -979,19 +962,21 @@ async def main():
         
         # Mantener el bot ejecutándose
         try:
-            await asyncio.Future()
+            await asyncio.Future()  # Esperar indefinidamente
         except (KeyboardInterrupt, SystemExit):
             logger.info("Bot detenido manualmente")
-        
+        finally:
+            # Guardar estado antes de salir
+            save_state()
+            await application.updater.stop()
+            await application.stop()
+            
     except Exception as e:
         logger.error(f"Error crítico en el bot: {e}")
-        
-    finally:
-        # Guardar estado antes de salir
-        save_state()
-        # Detener el bot de manera segura
-        await application.updater.stop()
-        await application.stop()
+        if 'application' in locals():
+            await application.updater.stop()
+            await application.stop()
+        raise
 
 if __name__ == "__main__":
     try:
