@@ -34,7 +34,7 @@ client_ai = OpenAI(
 )
 
 # Configuración del bot
-BOT_TOKEN = "7551775190:AAFtrWkTZYAqK0Ei0fptBzsP4VHRQGi9ISw"
+BOT_TOKEN = "7551775190:AAHeQWSdP-wN8-w4bTnJukC7fwVI_Jd_EHA"
 ADMIN_ID = 1742433244  # ID del administrador
 
 # Definición de canales y sus temáticas
