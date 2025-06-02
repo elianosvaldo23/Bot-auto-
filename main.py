@@ -902,7 +902,7 @@ async def keep_alive(context):
             try:
                 async with aiohttp.ClientSession() as session:
                     # Reemplaza con tu URL de Render
-                    app_url = f"https://{os.getenv('RENDER_EXTERNAL_URL', 'tu-app.onrender.com')}"
+                    app_url = f"https://{os.getenv('RENDER_EXTERNAL_URL', 'https://bot-auto-qrpo.onrender.com')}"
                     async with session.get(app_url) as response:
                         if response.status == 200:
                             logger.info("Keep-alive ping exitoso")
